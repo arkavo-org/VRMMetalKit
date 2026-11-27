@@ -1707,17 +1707,19 @@ public class VRMMaterial: @unchecked Sendable {
     /// `true` when this material is transparent and writes to depth (combination of VRM 1.0 flag and VRM 0.x heuristics).
     /// Used by the render-item sorter to place these materials between OPAQUE and BLEND queues.
     public var isTransparentWithZWrite: Bool {
-        // Explicit flag from VRM 1.0 extension
+        // Explicit flag from VRM 1.0 extension (or VRM 0.x _BlendMode == 3)
         if transparentWithZWrite {
             return true
         }
-        // VRM 0.x: BlendMode 3 is explicitly TransparentWithZWrite
-        if blendMode == 3 {
-            return true
+        // VRM 0.x legacy inference only (VRM 1.0 and plain glTF use explicit transparentWithZWrite)
+        if vrmVersion == .v0_0 {
+            if blendMode == 3 {
+                return true
+            }
+            let isTransparent = alphaMode.uppercased() == "BLEND" || blendMode == 2
+            return isTransparent && zWriteEnabled
         }
-        // VRM 0.x: Infer from properties - transparent material with zWrite enabled
-        let isTransparent = alphaMode == "BLEND" || blendMode == 2
-        return isTransparent && zWriteEnabled
+        return false
     }
 
     /// Coarse pipeline bucket used to pick between opaque and blended render-pass pipeline states.

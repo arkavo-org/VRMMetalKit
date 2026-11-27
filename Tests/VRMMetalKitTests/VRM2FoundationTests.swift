@@ -138,9 +138,15 @@ final class VRM2FoundationTests: XCTestCase {
             height: size,
             mipmapped: false
         )
-        depthDesc.usage = [.renderTarget, .shaderRead]
-        depthDesc.storageMode = .shared
+        depthDesc.usage = [.renderTarget]
+        depthDesc.storageMode = .private
         let depthTex = try XCTUnwrap(device.makeTexture(descriptor: depthDesc))
+
+        let depthBytesPerRow = size * MemoryLayout<Float>.stride
+        let depthByteCount = size * depthBytesPerRow
+        let depthReadback = try XCTUnwrap(
+            device.makeBuffer(length: depthByteCount, options: .storageModeShared)
+        )
 
         let rpd = MTLRenderPassDescriptor()
         rpd.colorAttachments[0].texture = colorTex
@@ -158,14 +164,28 @@ final class VRM2FoundationTests: XCTestCase {
         let queue = try XCTUnwrap(device.makeCommandQueue())
         let cb = try XCTUnwrap(queue.makeCommandBuffer())
         renderer.drawOffscreen(to: colorTex, depth: depthTex, commandBuffer: cb, renderPassDescriptor: rpd)
+        if let blit = cb.makeBlitCommandEncoder() {
+            blit.copy(
+                from: depthTex,
+                sourceSlice: 0,
+                sourceLevel: 0,
+                sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                sourceSize: MTLSize(width: size, height: size, depth: 1),
+                to: depthReadback,
+                destinationOffset: 0,
+                destinationBytesPerRow: depthBytesPerRow,
+                destinationBytesPerImage: depthByteCount
+            )
+            blit.endEncoding()
+        }
         cb.commit()
         cb.waitUntilCompleted()
         XCTAssertNil(cb.error)
 
         var rgba = [UInt8](repeating: 0, count: size * size * 4)
         colorTex.getBytes(&rgba, bytesPerRow: size * 4, from: MTLRegionMake2D(0, 0, size, size), mipmapLevel: 0)
-        var depth = [Float](repeating: 1, count: size * size)
-        depthTex.getBytes(&depth, bytesPerRow: size * MemoryLayout<Float>.stride, from: MTLRegionMake2D(0, 0, size, size), mipmapLevel: 0)
+        let depthPtr = depthReadback.contents().bindMemory(to: Float.self, capacity: size * size)
+        let depth = Array(UnsafeBufferPointer(start: depthPtr, count: size * size))
         return (rgba, depth)
     }
 
@@ -224,6 +244,7 @@ final class VRM2FoundationTests: XCTestCase {
         cfg.colorPixelFormat = .rgba8Unorm
         let renderer = VRMRenderer(device: device, config: cfg)
         renderer.loadModelWithoutWarmup(model)
+        renderer.setLightNormalizationMode(.radiometric)
         renderer.setLight(0, direction: [0, 0, 1], color: [1, 1, 1], intensity: 1.0) // light behind quad -> shade side
         renderer.disableLight(1)
         renderer.disableLight(2)
