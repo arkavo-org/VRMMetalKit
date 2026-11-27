@@ -275,26 +275,15 @@ public final class VMCDriver: @unchecked Sendable {
     /// Unity's thumb chain is Proximal/Intermediate/Distal; VRM 1.0 names the
     /// same three bones Metacarpal/Proximal/Distal, so the thumb shifts by one.
     public static func humanoidBone(unityName: String) -> VRMHumanoidBone? {
-        if let shifted = thumbShift[unityName] { return shifted }
         guard let first = unityName.first else { return nil }
-        return VRMHumanoidBone(rawValue: first.lowercased() + unityName.dropFirst())
+        return VRMHumanoidBone(vrm0Name: first.lowercased() + unityName.dropFirst())
     }
 
     /// Unity `HumanBodyBones` name for a VRM bone (inverse of ``humanoidBone(unityName:)``).
     public static func unityName(for bone: VRMHumanoidBone) -> String {
-        if let unity = thumbShift.first(where: { $0.value == bone })?.key { return unity }
-        let raw = bone.rawValue
-        return raw.prefix(1).uppercased() + raw.dropFirst()
+        let name = bone.vrm0Name
+        return name.prefix(1).uppercased() + name.dropFirst()
     }
-
-    private static let thumbShift: [String: VRMHumanoidBone] = [
-        "LeftThumbProximal": .leftThumbMetacarpal,
-        "LeftThumbIntermediate": .leftThumbProximal,
-        "LeftThumbDistal": .leftThumbDistal,
-        "RightThumbProximal": .rightThumbMetacarpal,
-        "RightThumbIntermediate": .rightThumbProximal,
-        "RightThumbDistal": .rightThumbDistal
-    ]
 
     /// Maps a VMC blend-shape name (VRM 1.0 preset or VRM 0.x alias) to a preset. ARKit and custom names return `nil`.
     public static func expressionPreset(blendShapeName name: String) -> VRMExpressionPreset? {

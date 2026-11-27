@@ -138,6 +138,38 @@ public enum VRMHumanoidBone: String, CaseIterable, Sendable {
             return false
         }
     }
+
+    private static let vrm0ThumbRemap: [String: VRMHumanoidBone] = [
+        "leftThumbProximal": .leftThumbMetacarpal,
+        "leftThumbIntermediate": .leftThumbProximal,
+        "rightThumbProximal": .rightThumbMetacarpal,
+        "rightThumbIntermediate": .rightThumbProximal
+    ]
+
+    private static let vrm1ToVRM0ThumbRemap: [VRMHumanoidBone: String] = [
+        .leftThumbMetacarpal: "leftThumbProximal",
+        .leftThumbProximal: "leftThumbIntermediate",
+        .rightThumbMetacarpal: "rightThumbProximal",
+        .rightThumbProximal: "rightThumbIntermediate"
+    ]
+
+    /// Parses a VRM 0.x camelCase humanoid bone name, remapping the VRM 0.x
+    /// thumb chain (`Proximal`/`Intermediate`/`Distal`) to VRM 1.0's
+    /// `Metacarpal`/`Proximal`/`Distal`.
+    public init?(vrm0Name: String) {
+        if let remapped = Self.vrm0ThumbRemap[vrm0Name] {
+            self = remapped
+        } else if let direct = Self(rawValue: vrm0Name) {
+            self = direct
+        } else {
+            return nil
+        }
+    }
+
+    /// VRM 0.x camelCase humanoid bone name (inverse of ``init(vrm0Name:)``).
+    public var vrm0Name: String {
+        Self.vrm1ToVRM0ThumbRemap[self] ?? rawValue
+    }
 }
 
 // MARK: - Expression Types
