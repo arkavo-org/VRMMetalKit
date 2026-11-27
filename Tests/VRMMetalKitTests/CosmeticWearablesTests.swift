@@ -956,22 +956,19 @@ final class CosmeticWearablesTests: XCTestCase {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal not available")
         }
-        // Verify all 5 platform .metallib files exist in Sources/VRMMetalKit/Resources
-        let slices = [
-            "VRMMetalKitShaders.metallib",
-            "VRMMetalKitShaders_iOS.metallib",
-            "VRMMetalKitShaders_iOSSimulator.metallib",
-            "VRMMetalKitShaders_visionOS.metallib",
-            "VRMMetalKitShaders_visionOSSimulator.metallib",
+        // Verify all 5 platform .metallib slices are bundled in VRMMetalKit's resource bundle.
+        let sliceNames = [
+            "VRMMetalKitShaders",
+            "VRMMetalKitShaders_iOS",
+            "VRMMetalKitShaders_iOSSimulator",
+            "VRMMetalKitShaders_visionOS",
+            "VRMMetalKitShaders_visionOSSimulator",
         ]
-        let repoRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let resDir = repoRoot.appendingPathComponent("Sources/VRMMetalKit/Resources")
-        for slice in slices {
-            let path = resDir.appendingPathComponent(slice).path
-            XCTAssertTrue(FileManager.default.fileExists(atPath: path), "Missing metallib slice: \(slice)")
+        for sliceName in sliceNames {
+            XCTAssertNotNil(
+                VRMShaderLibraryLoader.bundledSliceURL(named: sliceName),
+                "Missing bundled metallib slice: \(sliceName).metallib"
+            )
         }
 
         let lib = try VRMShaderLibraryLoader.loadBundledLibrary(device: device)

@@ -78,6 +78,11 @@ enum VRMShaderLibraryLoader {
         return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 
+    /// Returns the URL of a named `.metallib` slice inside the package resource bundle.
+    static func bundledSliceURL(named name: String) -> URL? {
+        Bundle.module.url(forResource: name, withExtension: "metallib")
+    }
+
     /// Loads the bundled shader library for the current platform from the package resource bundle.
     ///
     /// - Parameter device: The `MTLDevice` to create the library against.
