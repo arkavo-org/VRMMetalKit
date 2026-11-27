@@ -127,11 +127,11 @@ final class MToonOutlineScaleTests: XCTestCase {
         let texture = try XCTUnwrap(device.makeTexture(descriptor: descriptor))
         var pixels: [UInt8] = [0, 0, 0, 255, 255, 255, 255, 255]
         texture.replace(region: MTLRegionMake2D(0, 0, 2, 1), mipmapLevel: 0, withBytes: &pixels, bytesPerRow: 8)
-        model.textures.append(VRMTexture(name: "outlineMask", mtlTexture: texture))
-        let maskIndex = model.textures.count - 1
+        let maskTex = VRMTexture(name: "outlineMask", mtlTexture: texture)
+        model.textures.append(maskTex)
         for material in model.materials {
             material.doubleSided = doubleSided
-            material.mtoon?.outlineWidthMultiplyTexture = maskIndex
+            material.mtoon?.outlineWidthMultiplyTexture = maskTex
             switch transform {
             case .none:
                 break
@@ -155,7 +155,7 @@ final class MToonOutlineScaleTests: XCTestCase {
         authoredWidth: Float? = nil
     ) async throws -> [UInt8] {
         let model = try await SwatchScene.load(fixture, device: device)
-        var maskIndex: Int?
+        var maskTex: VRMTexture?
         if let widthMask {
             let descriptor = MTLTextureDescriptor.texture2DDescriptor(
                 pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false)
@@ -163,13 +163,14 @@ final class MToonOutlineScaleTests: XCTestCase {
             let texture = try XCTUnwrap(device.makeTexture(descriptor: descriptor))
             var pixel: [UInt8] = [widthMask, widthMask, widthMask, 255]
             texture.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &pixel, bytesPerRow: 4)
-            model.textures.append(VRMTexture(name: "outlineMask", mtlTexture: texture))
-            maskIndex = model.textures.count - 1
+            let vrmTex = VRMTexture(name: "outlineMask", mtlTexture: texture)
+            model.textures.append(vrmTex)
+            maskTex = vrmTex
         }
         for material in model.materials {
             material.doubleSided = doubleSided
             if var mtoon = material.mtoon {
-                if let maskIndex { mtoon.outlineWidthMultiplyTexture = maskIndex }
+                if let maskTex { mtoon.outlineWidthMultiplyTexture = maskTex }
                 if let authoredWidth { mtoon.outlineWidthFactor = authoredWidth }
                 material.mtoon = mtoon
             }

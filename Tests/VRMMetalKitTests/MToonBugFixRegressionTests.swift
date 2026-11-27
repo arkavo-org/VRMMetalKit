@@ -129,7 +129,6 @@ final class MToonBugFixRegressionTests: XCTestCase {
         let model = try await SwatchScene.load(.rigid, device: device)
         let blueTex = try makeSolidTexture(r: 0, g: 0, b: 255, a: 255, name: "rim_blue")
         model.textures.append(blueTex)
-        let blueIndex = model.textures.count - 1
 
         let sphere = model.materials[1]
         sphere.baseColorFactor = SIMD4<Float>(0, 0, 0, 1)
@@ -138,7 +137,7 @@ final class MToonBugFixRegressionTests: XCTestCase {
         sphere.mtoon?.parametricRimFresnelPowerFactor = 2.0
         sphere.mtoon?.parametricRimLiftFactor = 0.0
         sphere.mtoon?.rimLightingMixFactor = 0.0
-        sphere.mtoon?.rimMultiplyTexture = blueIndex
+        sphere.mtoon?.rimMultiplyTexture = blueTex
         sphere.mtoon?.outlineWidthMode = .none
 
         var setup = SwatchScene.Setup()
@@ -170,10 +169,11 @@ final class MToonBugFixRegressionTests: XCTestCase {
             "Pure-blue rimMultiplyTexture must suppress green channel (got maxG=\(maxG))")
     }
 
-    // MARK: - Non-MToon eye auto-override respects disableAutoMaterialOverrides
+    // MARK: - Non-MToon eye material preserves authored black albedo in spec-driven mode
 
-    /// Setting `disableAutoMaterialOverrides = true` must suppress the non-MToon
-    /// `"eye"` fallback override that otherwise forces `shadeColorFactor = (1, 1, 1)`.
+    /// Under v2.0 spec-driven default (`legacyMaterialHeuristics == false`),
+    /// non-MToon `"FaceEye_00"` keeps its authored black albedo instead of
+    /// getting forced to white.
     func testDisableAutoMaterialOverridesProtectsNonMToonEyeMaterial() async throws {
         let model = try await SwatchScene.load(.rigid, device: device)
         let gltfMat = try JSONDecoder().decode(
@@ -193,7 +193,6 @@ final class MToonBugFixRegressionTests: XCTestCase {
         setup.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
 
         let pixels = try SwatchScene.render(model, device: device, setup: setup) { renderer in
-            renderer.disableAutoMaterialOverrides = true
             renderer.setAmbientColor(SIMD3<Float>(0, 0, 0))
         }
 
@@ -207,7 +206,7 @@ final class MToonBugFixRegressionTests: XCTestCase {
         }
 
         XCTAssertLessThan(maxLuma, 0.05,
-            "Non-MToon FaceEye_00 with black albedo and disableAutoMaterialOverrides=true must remain black, got max luma=\(maxLuma)")
+            "Non-MToon FaceEye_00 with black albedo in spec-driven mode must remain black, got max luma=\(maxLuma)")
     }
 
     // MARK: - mtoon_debug_rim single-channel parametricRimColorFactor
@@ -317,12 +316,11 @@ final class MToonBugFixRegressionTests: XCTestCase {
         let model = try await SwatchScene.load(.rigid, device: device)
         let matcap = try makeDirectionalMatCapTexture(size: 64)
         model.textures.append(matcap)
-        let matcapIndex = model.textures.count - 1
 
         let sphere = model.materials[1]
         sphere.baseColorFactor = SIMD4<Float>(0, 0, 0, 1)
         sphere.mtoon?.shadeColorFactor = SIMD3<Float>(0, 0, 0)
-        sphere.mtoon?.matcapTexture = matcapIndex
+        sphere.mtoon?.matcapTexture = matcap
         sphere.mtoon?.matcapFactor = SIMD3<Float>(1, 1, 1)
         sphere.mtoon?.outlineWidthMode = .none
 

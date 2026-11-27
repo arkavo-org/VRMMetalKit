@@ -116,8 +116,9 @@ final class MToonUVAnimationTests: XCTestCase {
         sphere.mtoon?.uvAnimationRotationSpeedFactor = rotation
         sphere.mtoon?.outlineWidthMode = .none
         if let mask {
-            model.textures.append(try texture(width: 1, height: 1, pixels: mask))
-            sphere.mtoon?.uvAnimationMaskTexture = model.textures.count - 1
+            let maskTex = try texture(width: 1, height: 1, pixels: mask)
+            model.textures.append(maskTex)
+            sphere.mtoon?.uvAnimationMaskTexture = maskTex
         }
     }
 

@@ -55,40 +55,48 @@ import simd
 /// warning if a draw references a palette that wasn't refreshed for the
 /// current frame.
 public class VRMSkinningSystem {
+    private struct SkinSlot {
+        var matrixOffset: Int
+        var bufferByteOffset: Int
+        var jointCount: Int
+        var version: UInt64
+        var latestPaletteSlot: Int
+        var lastJointGeneration: UInt64?
+        var dirty: Bool
+        var lastUpdatedFrame: Int?
+        var paletteVersions: [UInt64]
+    }
+
     private let device: MTLDevice
-    /// The current frame's joint-matrices buffer. Exposed for debugging and renderer-side validation; callers should bind via ``getJointMatricesBuffer()`` and offset by ``VRMSkin/bufferByteOffset``.
+    /// The current frame's joint-matrices buffer. Exposed for debugging and renderer-side validation; callers should bind via ``getJointMatricesBuffer()`` and offset by ``getBufferOffset(for:)``.
     public var jointMatricesBuffer: MTLBuffer?
     // Each renderer in-flight slot owns its palette until GPU completion.
     private var paletteBuffers: [MTLBuffer] = []
     private var paletteSlot = 0
-    private var paletteVersions: [[UInt64]] = []
-    private var skinVersions: [UInt64] = []
-    private var latestPaletteSlots: [Int] = []
+    private var skinSlots: [ObjectIdentifier: SkinSlot] = [:]
+    private var orderedSkinIDs: [ObjectIdentifier] = []
+    private var lastLayoutRevision: UInt64? = nil
+    private var lastContentRevision: UInt64? = nil
+    private var lastSyncedJointCounts: [Int] = []
     /// Dedicated read-only buffer of identity matrices. Bound at the joint
     /// matrices slot when the skinned pipeline draws a primitive whose owning
     /// node has `skin == nil` (issue #161). Distinct from `jointMatricesBuffer`
     /// so live updates cannot corrupt the identities.
     public private(set) var identityJointMatricesBuffer: MTLBuffer?
     private var totalMatrixCount = 0
-    private var lastUpdatedSkinIndex: Int? = nil  // Cache to avoid redundant updates
+    private var lastUpdatedSkinID: ObjectIdentifier? = nil
     private var debugFrameCount = 0
 
     // Freshness tracking
     private var currentFrameNumber: Int = 0
-    private var skinLastUpdatedFrame: [Int: Int] = [:]  // skinIndex -> frameNumber
+    private var allSkinsUpdatedFrame: Int? = nil
 
-    // Dirty tracking: only recompute joint matrices when a skin's joints may have changed.
-    private var skinDirty: [Int: Bool] = [:]
-    private var skinCount: Int = 0
-    /// Last mixed joint ``VRMNode/worldGeneration`` seen by ``markSkinsDirtyIfJointsMoved(_:)``.
-    private var lastJointGeneration: [Int: UInt64] = [:]
-
-    /// A/B test hook: when set to a skin index, ``updateJointMatrices(for:skinIndex:)`` writes identity matrices for that skin instead of the computed palette.
+    /// A/B test hook: when set to a skin index, ``updateJointMatrices(for:)`` writes identity matrices for that skin instead of the computed palette.
     public var testIdentityPalette: Int? = nil {
         didSet { markAllSkinsDirty() }
     }
 
-    /// Creates a skinning system bound to `device`. Call ``setupForSkins(_:)`` before issuing updates.
+    /// Creates a skinning system bound to `device`. Call ``syncForSkins(_:layoutRevision:contentRevision:)`` or ``setupForSkins(_:)`` before issuing updates.
     public init(device: MTLDevice) {
         self.device = device
     }
@@ -98,19 +106,76 @@ public class VRMSkinningSystem {
     /// Writes each skin's ``VRMSkin/matrixOffset`` and
     /// ``VRMSkin/bufferByteOffset`` and pre-fills the entire buffer with
     /// identity matrices so any uninitialised slot returns a safe value.
-    /// Also allocates ``identityJointMatricesBuffer`` to the same padded
-    /// size.
+    /// Also ensures ``identityJointMatricesBuffer`` covers at least the same padded size.
     public func setupForSkins(_ skins: [VRMSkin]) {
-        // Calculate total matrix count and assign offsets
+        lastLayoutRevision = nil
+        lastContentRevision = nil
+        rebuildLayout(for: skins)
+    }
+
+    /// Incrementally synchronizes skin slots and GPU palette rings against a dynamic skin list.
+    ///
+    /// Reallocates the `maxBufferedFrames` ring whenever `layoutRevision` changes or the set/size of skins
+    /// changes (in-flight command buffers retain references to the previous buffers until GPU completion),
+    /// grows ``identityJointMatricesBuffer`` when needed, and marks all skins dirty on `contentRevision` changes.
+    public func syncForSkins(_ skins: [VRMSkin], layoutRevision: UInt64, contentRevision: UInt64) {
+        let skinIDs = skins.map { ObjectIdentifier($0) }
+        let jointCounts = skins.map { $0.joints.count }
+
+        let layoutChanged = lastLayoutRevision != layoutRevision
+            || skinIDs != orderedSkinIDs
+            || jointCounts != lastSyncedJointCounts
+            || (!skins.isEmpty && paletteBuffers.isEmpty)
+
+        if layoutChanged {
+            rebuildLayout(for: skins)
+            lastLayoutRevision = layoutRevision
+            lastContentRevision = contentRevision
+            return
+        }
+
+        if lastContentRevision != contentRevision {
+            markAllSkinsDirty()
+            for id in orderedSkinIDs {
+                skinSlots[id]?.lastJointGeneration = nil
+            }
+            lastContentRevision = contentRevision
+        }
+    }
+
+    private func rebuildLayout(for skins: [VRMSkin]) {
+        let matrixSize = MemoryLayout<float4x4>.stride
+        let frameCount = VRMConstants.Rendering.maxBufferedFrames
+
+        skinSlots.removeAll(keepingCapacity: true)
+        orderedSkinIDs.removeAll(keepingCapacity: true)
+        lastSyncedJointCounts.removeAll(keepingCapacity: true)
+        orderedSkinIDs.reserveCapacity(skins.count)
+        lastSyncedJointCounts.reserveCapacity(skins.count)
+
         var currentOffset = 0
         var currentByteOffset = 0
-        let matrixSize = MemoryLayout<float4x4>.stride
 
         for (index, skin) in skins.enumerated() {
+            let id = ObjectIdentifier(skin)
+            let skinMatrixCount = skin.joints.count
             skin.matrixOffset = currentOffset
             skin.bufferByteOffset = currentByteOffset
 
-            let skinMatrixCount = skin.joints.count
+            skinSlots[id] = SkinSlot(
+                matrixOffset: currentOffset,
+                bufferByteOffset: currentByteOffset,
+                jointCount: skinMatrixCount,
+                version: 0,
+                latestPaletteSlot: paletteSlot,
+                lastJointGeneration: nil,
+                dirty: true,
+                lastUpdatedFrame: nil,
+                paletteVersions: Array(repeating: 0, count: frameCount)
+            )
+            orderedSkinIDs.append(id)
+            lastSyncedJointCounts.append(skinMatrixCount)
+
             currentOffset += skinMatrixCount
             currentByteOffset += skinMatrixCount * matrixSize
 
@@ -118,59 +183,45 @@ public class VRMSkinningSystem {
         }
 
         totalMatrixCount = currentOffset
-        skinCount = skins.count
-        lastJointGeneration.removeAll(keepingCapacity: true)
-        skinDirty.removeAll(keepingCapacity: true)
-        paletteSlot = 0
-        skinVersions = Array(repeating: 0, count: skinCount)
-        latestPaletteSlots = Array(repeating: 0, count: skinCount)
-        paletteVersions = Array(
-            repeating: Array(repeating: 0, count: skinCount),
-            count: VRMConstants.Rendering.maxBufferedFrames)
-        for index in skins.indices {
-            skinDirty[index] = true
-        }
+        allSkinsUpdatedFrame = nil
 
-        // Allocate the large buffer for all skins.
-        // Every draw binds this buffer at its own skin's slice base, so the
-        // shader's last-resort clamp (maxJointCount - 1) indexes relative to
-        // that offset. A tail of maxJointCount matrices after the live range
-        // keeps the clamp in-bounds for EVERY skin's offset, not just skin 0's.
         let paddedMatrixCount = totalMatrixCount + VRMConstants.Animation.maxJointCount
+        ensureIdentityJointMatricesBuffer(matrixCount: paddedMatrixCount, matrixSize: matrixSize)
+
         let totalBufferSize = paddedMatrixCount * matrixSize
-        paletteBuffers = (0..<VRMConstants.Rendering.maxBufferedFrames).compactMap { slot in
+        let newBuffers = (0..<frameCount).compactMap { slot -> MTLBuffer? in
             let buffer = device.makeBuffer(length: totalBufferSize, options: .storageModeShared)
             buffer?.label = "Skin palettes frame \(slot)"
             return buffer
         }
-        // An incomplete ring cannot safely support the renderer's in-flight count.
-        guard paletteBuffers.count == VRMConstants.Rendering.maxBufferedFrames else {
+        guard newBuffers.count == frameCount else {
             paletteBuffers.removeAll()
             jointMatricesBuffer = nil
             return
         }
-        jointMatricesBuffer = paletteBuffers[paletteSlot]
-        vrmLog("[SKINNING] Allocated \(paletteBuffers.count) palettes for \(totalMatrixCount) matrices (\(totalBufferSize) bytes each, including padding)")
-
-        // Initialize ALL matrices to identity to prevent garbage reads
-        // This includes padding matrices that may be accessed by clamped garbage indices
-        for buffer in paletteBuffers {
+        for buffer in newBuffers {
             let pointer = buffer.contents().bindMemory(to: float4x4.self, capacity: paddedMatrixCount)
             for i in 0..<paddedMatrixCount {
-                pointer[i] = float4x4(1)  // Identity matrix
+                pointer[i] = matrix_identity_float4x4
             }
         }
-
-        allocateIdentityJointMatricesBuffer(matrixCount: paddedMatrixCount, matrixSize: matrixSize)
+        paletteBuffers = newBuffers
+        if paletteSlot >= paletteBuffers.count {
+            paletteSlot = 0
+        }
+        jointMatricesBuffer = paletteBuffers[paletteSlot]
+        vrmLog("[SKINNING] Allocated \(paletteBuffers.count) palettes for \(totalMatrixCount) matrices (\(totalBufferSize) bytes each, including padding)")
     }
 
-    /// Allocate (once) the dedicated identity-matrix buffer used as the
-    /// rigid-fallback joint binding. Sized to match the live joint buffer's
-    /// padded matrix count so the shader can clamp/read any joint index safely.
-    private func allocateIdentityJointMatricesBuffer(matrixCount: Int, matrixSize: Int) {
-        guard identityJointMatricesBuffer == nil else { return }
-        let length = matrixCount * matrixSize
-        guard let buffer = device.makeBuffer(length: length, options: .storageModeShared) else { return }
+    /// Ensures the dedicated identity-matrix buffer is allocated and covers at least `matrixCount` matrices.
+    /// Grows atomically by replacing the reference (in-flight command buffers retain the previous buffer).
+    private func ensureIdentityJointMatricesBuffer(matrixCount: Int, matrixSize: Int) {
+        let requiredLength = matrixCount * matrixSize
+        if let existing = identityJointMatricesBuffer, existing.length >= requiredLength {
+            return
+        }
+        guard let buffer = device.makeBuffer(length: requiredLength, options: .storageModeShared) else { return }
+        buffer.label = "Identity Joint Matrices (\(matrixCount))"
         let pointer = buffer.contents().bindMemory(to: float4x4.self, capacity: matrixCount)
         for i in 0..<matrixCount {
             pointer[i] = matrix_identity_float4x4
@@ -187,63 +238,68 @@ public class VRMSkinningSystem {
     /// vertices.
     ///
     /// Marks the skin as updated for the current frame via
-    /// ``markSkinUpdated(skinIndex:)``.
-    public func updateJointMatrices(for skin: VRMSkin, skinIndex: Int) {
-        guard let buffer = jointMatricesBuffer else { return }
+    /// ``markSkinUpdated(for:)``.
+    public func updateJointMatrices(for skin: VRMSkin) {
+        let id = ObjectIdentifier(skin)
+        guard let buffer = jointMatricesBuffer,
+              var slot = skinSlots[id] else { return }
 
-        // Skip recomputation when the skin's joints have not changed.
-        guard isSkinDirty(skinIndex: skinIndex) else {
-            // A clean skin may still have an older pose in this frame slot.
-            // Copy the latest published palette instead of rebuilding matrices.
-            if paletteVersions[paletteSlot][skinIndex] != skinVersions[skinIndex] {
-                let source = paletteBuffers[latestPaletteSlots[skinIndex]]
-                buffer.contents().advanced(by: skin.bufferByteOffset).copyMemory(
-                    from: source.contents().advanced(by: skin.bufferByteOffset),
-                    byteCount: skin.joints.count * MemoryLayout<float4x4>.stride)
-                paletteVersions[paletteSlot][skinIndex] = skinVersions[skinIndex]
+        guard slot.dirty else {
+            if slot.paletteVersions[paletteSlot] != slot.version {
+                let source = paletteBuffers[slot.latestPaletteSlot]
+                let copyCount = min(slot.jointCount, skin.joints.count)
+                if copyCount > 0 {
+                    buffer.contents().advanced(by: slot.bufferByteOffset).copyMemory(
+                        from: source.contents().advanced(by: slot.bufferByteOffset),
+                        byteCount: copyCount * MemoryLayout<float4x4>.stride)
+                }
+                slot.paletteVersions[paletteSlot] = slot.version
             }
-            markSkinUpdated(skinIndex: skinIndex)
+            slot.lastUpdatedFrame = currentFrameNumber
+            skinSlots[id] = slot
             return
         }
 
+        let count = min(slot.jointCount, skin.joints.count, skin.inverseBindMatrices.count)
         let pointer = buffer.contents()
-            .advanced(by: skin.bufferByteOffset)
-            .bindMemory(to: float4x4.self, capacity: skin.joints.count)
+            .advanced(by: slot.bufferByteOffset)
+            .bindMemory(to: float4x4.self, capacity: max(1, slot.jointCount))
 
-        skinVersions[skinIndex] &+= 1
-        paletteVersions[paletteSlot][skinIndex] = skinVersions[skinIndex]
-        latestPaletteSlots[skinIndex] = paletteSlot
-        markSkinUpdated(skinIndex: skinIndex)
-        clearSkinDirty(skinIndex: skinIndex)
+        slot.version &+= 1
+        slot.paletteVersions[paletteSlot] = slot.version
+        slot.latestPaletteSlot = paletteSlot
+        slot.lastUpdatedFrame = currentFrameNumber
+        slot.dirty = false
+        skinSlots[id] = slot
 
-        // A/B TEST: Use identity matrices if this skin is being tested
-        if let testSkin = testIdentityPalette, testSkin == skinIndex {
-            for i in 0..<skin.joints.count {
+        if let testSkinIndex = testIdentityPalette,
+           testSkinIndex >= 0,
+           testSkinIndex < orderedSkinIDs.count,
+           orderedSkinIDs[testSkinIndex] == id {
+            for i in 0..<slot.jointCount {
                 pointer[i] = matrix_identity_float4x4
             }
             return
         }
 
-        lastUpdatedSkinIndex = skinIndex
+        lastUpdatedSkinID = id
         debugFrameCount += 1
 
-        // Iterate via unsafe buffer pointers so the hot loop doesn't
-        // retain/release each VRMNode reference or the array containers on
-        // every element. Profile sampling showed ARC traffic in this loop
-        // was the dominant non-GPU cost per frame.
         skin.joints.withUnsafeBufferPointer { joints in
             skin.inverseBindMatrices.withUnsafeBufferPointer { ibms in
-                let count = joints.count
                 for index in 0..<count {
                     let skinMatrix = joints[index].worldMatrix * ibms[index]
-                    // Diagonal-only NaN/Inf guard. Sufficient to catch garbage
-                    // without allocating a per-joint validation array.
                     let diagValid = skinMatrix[0][0].isFinite
                         && skinMatrix[1][1].isFinite
                         && skinMatrix[2][2].isFinite
                         && skinMatrix[3][3].isFinite
                     pointer[index] = diagValid ? skinMatrix : matrix_identity_float4x4
                 }
+            }
+        }
+        if count < slot.jointCount {
+            for index in count..<slot.jointCount {
+                pointer[index] = matrix_identity_float4x4
             }
         }
     }
@@ -256,7 +312,7 @@ public class VRMSkinningSystem {
 
     /// Returns the byte offset within ``getJointMatricesBuffer()`` where `skin`'s palette begins.
     public func getBufferOffset(for skin: VRMSkin) -> Int {
-        return skin.bufferByteOffset
+        return skinSlots[ObjectIdentifier(skin)]?.bufferByteOffset ?? skin.bufferByteOffset
     }
 
     /// Returns the total joint count across all configured skins (unpadded).
@@ -266,7 +322,7 @@ public class VRMSkinningSystem {
 
     /// Clears the per-frame "last updated skin" cache. Call once per frame before issuing palette updates.
     public func beginFrame() {
-        lastUpdatedSkinIndex = nil
+        lastUpdatedSkinID = nil
     }
 
     /// Select a palette after the renderer has acquired this in-flight slot.
@@ -281,34 +337,37 @@ public class VRMSkinningSystem {
     /// Stamps every skin as fresh for `frameNumber` (used when the caller updates all skins in one pass).
     public func markAllSkinsUpdated(frameNumber: Int) {
         currentFrameNumber = frameNumber
-        // Clear the tracking dictionary and mark all as fresh
-        skinLastUpdatedFrame.removeAll()
+        allSkinsUpdatedFrame = frameNumber
+        for id in orderedSkinIDs {
+            skinSlots[id]?.lastUpdatedFrame = frameNumber
+        }
     }
 
     /// Stamps a single skin as fresh for the current frame.
-    public func markSkinUpdated(skinIndex: Int) {
-        skinLastUpdatedFrame[skinIndex] = currentFrameNumber
+    public func markSkinUpdated(for skin: VRMSkin) {
+        let id = ObjectIdentifier(skin)
+        skinSlots[id]?.lastUpdatedFrame = currentFrameNumber
     }
 
     /// Marks a single skin as needing joint-matrix recomputation.
-    public func markSkinDirty(skinIndex: Int) {
-        skinDirty[skinIndex] = true
+    public func markSkinDirty(for skin: VRMSkin) {
+        skinSlots[ObjectIdentifier(skin)]?.dirty = true
     }
 
     /// Clears the dirty flag for a single skin after it has been recomputed.
-    public func clearSkinDirty(skinIndex: Int) {
-        skinDirty[skinIndex] = false
+    public func clearSkinDirty(for skin: VRMSkin) {
+        skinSlots[ObjectIdentifier(skin)]?.dirty = false
     }
 
     /// Returns `true` if the skin should have its joint matrices recomputed this frame.
-    public func isSkinDirty(skinIndex: Int) -> Bool {
-        return skinDirty[skinIndex] ?? true
+    public func isSkinDirty(for skin: VRMSkin) -> Bool {
+        return skinSlots[ObjectIdentifier(skin)]?.dirty ?? true
     }
 
     /// Marks every configured skin as needing joint-matrix recomputation.
     public func markAllSkinsDirty() {
-        for index in 0..<skinCount {
-            skinDirty[index] = true
+        for id in orderedSkinIDs {
+            skinSlots[id]?.dirty = true
         }
     }
 
@@ -318,63 +377,63 @@ public class VRMSkinningSystem {
     /// half-animated avatars skip the `world × IBM` upload for skins that
     /// did not move.
     public func markSkinsDirtyIfJointsMoved(_ skins: [VRMSkin]) {
-        for (index, skin) in skins.enumerated() {
+        for skin in skins {
+            let id = ObjectIdentifier(skin)
+            guard var slot = skinSlots[id] else { continue }
             var generation: UInt64 = 0
             skin.joints.withUnsafeBufferPointer { joints in
                 for joint in joints {
                     generation = generation &* 16_777_619 &+ joint.worldGeneration
                 }
             }
-            if lastJointGeneration[index] != generation {
-                skinDirty[index] = true
-                lastJointGeneration[index] = generation
+            if slot.lastJointGeneration != generation {
+                slot.dirty = true
+                slot.lastJointGeneration = generation
+                skinSlots[id] = slot
             }
         }
     }
 
-    /// Logs a warning if `skinIndex` was not updated for `frameNumber`.
+    /// Logs a warning if `skin` was not updated for `frameNumber`.
     ///
     /// Does not throw; intended as a diagnostic gate before a draw call.
     /// Continues with stale data rather than aborting so the renderer
     /// degrades gracefully (typically falling back to bind pose).
-    public func verifySkinFreshness(skinIndex: Int, frameNumber: Int) {
-        // If we updated all skins this frame, they're all fresh
-        if currentFrameNumber == frameNumber {
-            return  // All good
+    public func verifySkinFreshness(for skin: VRMSkin, frameNumber: Int) {
+        if allSkinsUpdatedFrame == frameNumber {
+            return
         }
 
-        // Otherwise check individual skin update
-        if let lastUpdate = skinLastUpdatedFrame[skinIndex] {
+        let id = ObjectIdentifier(skin)
+        let diagnosticIndex = orderedSkinIDs.firstIndex(of: id) ?? -1
+        if let lastUpdate = skinSlots[id]?.lastUpdatedFrame {
             if lastUpdate != frameNumber {
-                vrmLog("⚠️ [FRESHNESS] WARNING: Skin \(skinIndex) is stale! Last updated frame \(lastUpdate), current frame \(frameNumber)")
-                // Log error instead of crashing to allow graceful degradation
+                vrmLog("⚠️ [FRESHNESS] WARNING: Skin \(diagnosticIndex) is stale! Last updated frame \(lastUpdate), current frame \(frameNumber)")
                 let error = VRMSkinningError.stalePalette(
-                    skinIndex: skinIndex,
+                    skinIndex: diagnosticIndex,
                     lastFrame: lastUpdate,
                     currentFrame: frameNumber
                 )
                 vrmLog("❌ [VRMSkinning] \(error.localizedDescription)")
-                // Continue with stale data rather than crashing
             }
         } else {
-            vrmLog("⚠️ [FRESHNESS] WARNING: Skin \(skinIndex) was never updated!")
-            // Log error instead of crashing to allow graceful degradation
-            let error = VRMSkinningError.neverUpdatedPalette(skinIndex: skinIndex)
+            vrmLog("⚠️ [FRESHNESS] WARNING: Skin \(diagnosticIndex) was never updated!")
+            let error = VRMSkinningError.neverUpdatedPalette(skinIndex: diagnosticIndex)
             vrmLog("❌ [VRMSkinning] \(error.localizedDescription)")
-            // Continue to allow debugging - may render with bind pose
         }
     }
 
     // MARK: - Phase 1 Validation: GPU Readback
 
     /// Validate that joint matrices in GPU buffer are non-identity (animation is active)
-    public func validateJointMatricesGPU(for skin: VRMSkin, skinIndex: Int, expectNonIdentity: Bool = true) {
+    public func validateJointMatricesGPU(for skin: VRMSkin, expectNonIdentity: Bool = true) {
         guard let buffer = jointMatricesBuffer else {
             vrmLog("❌ [VALIDATION] No joint matrices buffer allocated!")
             return
         }
 
-        let pointer = buffer.contents().advanced(by: skin.bufferByteOffset).bindMemory(to: float4x4.self, capacity: skin.joints.count)
+        let offset = getBufferOffset(for: skin)
+        let pointer = buffer.contents().advanced(by: offset).bindMemory(to: float4x4.self, capacity: max(1, skin.joints.count))
 
         var identityCount = 0
         var nonIdentityCount = 0
@@ -382,7 +441,6 @@ public class VRMSkinningSystem {
         for i in 0..<min(5, skin.joints.count) {
             let matrix = pointer[i]
 
-            // Check if matrix is identity
             let isIdentity = abs(matrix[0][0] - 1) < 0.001 && abs(matrix[1][1] - 1) < 0.001 &&
                             abs(matrix[2][2] - 1) < 0.001 && abs(matrix[3][3] - 1) < 0.001 &&
                             abs(matrix[0][3]) < 0.001 && abs(matrix[1][3]) < 0.001 && abs(matrix[2][3]) < 0.001
@@ -394,7 +452,7 @@ public class VRMSkinningSystem {
             }
 
             if i == 0 {
-                vrmLog("📊 [GPU READBACK] Skin \(skinIndex) Joint 0 matrix:")
+                vrmLog("📊 [GPU READBACK] Skin '\(skin.name ?? "unnamed")' Joint 0 matrix:")
                 vrmLog("    [\(matrix[0][0]), \(matrix[0][1]), \(matrix[0][2]), \(matrix[0][3])]")
                 vrmLog("    [\(matrix[1][0]), \(matrix[1][1]), \(matrix[1][2]), \(matrix[1][3])]")
                 vrmLog("    [\(matrix[2][0]), \(matrix[2][1]), \(matrix[2][2]), \(matrix[2][3])]")

@@ -74,7 +74,7 @@ final class MouthUVConformanceTests: XCTestCase {
         config.colorPixelFormat = .rgba8Unorm
         config.sampleCount = 1
         let renderer = VRMRenderer(device: device, config: config)
-        XCTAssertFalse(renderer.disableAutoMaterialOverrides, "Must pass without opting out")
+        XCTAssertFalse(renderer.config.legacyMaterialHeuristics, "Must pass under default spec-driven rendering")
         renderer.loadModel(model)
         renderer.disableLegacyAnimation = true
         renderer.setLight(0, direction: SIMD3<Float>(0, 0, -1), color: SIMD3<Float>(1, 1, 1), intensity: 1.0)

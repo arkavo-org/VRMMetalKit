@@ -18,17 +18,18 @@ import XCTest
 final class VRM0ShadeMultiplyTextureTests: XCTestCase {
 
     /// AvatarSample_A's hair case: `_ShadeTexture == _MainTex == 15`.
-    /// Must round-trip onto `mtoon.shadeMultiplyTexture = 15` — not nil.
+    /// Must round-trip onto `mtoon.shadeMultiplyTexture === textures[15]` — not nil.
     func testShadeMultiplyTextureSetWhenSameAsMainTexture() throws {
+        let textures = (0..<16).map { VRMTexture(name: "tex_\($0)") }
         var prop = VRM0MaterialProperty()
         prop.name = "N00_000_Hair_00_HAIR_01 (Instance)"
         prop.shader = "VRM/MToon"
         prop.textureProperties["_MainTex"] = 15
         prop.textureProperties["_ShadeTexture"] = 15
 
-        let mtoon = prop.toMToonMaterial()
+        let mtoon = prop.toMToonMaterial(textures: textures)
 
-        XCTAssertEqual(mtoon.shadeMultiplyTexture, 15,
+        XCTAssertTrue(mtoon.shadeMultiplyTexture === textures[15],
             "VRM 0.x conversion must bind shadeMultiplyTexture even when " +
             "it equals the main texture index. Skipping it leaves shadeColor " +
             "as the bare factor (white for hair), washing out the shadow side " +
@@ -40,29 +41,31 @@ final class VRM0ShadeMultiplyTextureTests: XCTestCase {
     /// Distinct indices must also be wired through (regression guard for
     /// over-tightening the fix to only the equal-index branch).
     func testShadeMultiplyTextureSetWhenDifferentFromMainTexture() throws {
+        let textures = (0..<16).map { VRMTexture(name: "tex_\($0)") }
         var prop = VRM0MaterialProperty()
         prop.name = "test_distinct_shade_tex"
         prop.shader = "VRM/MToon"
         prop.textureProperties["_MainTex"] = 7
         prop.textureProperties["_ShadeTexture"] = 12
 
-        let mtoon = prop.toMToonMaterial()
+        let mtoon = prop.toMToonMaterial(textures: textures)
 
-        XCTAssertEqual(mtoon.shadeMultiplyTexture, 12,
-            "VRM 0.x conversion must bind _ShadeTexture index when it " +
+        XCTAssertTrue(mtoon.shadeMultiplyTexture === textures[12],
+            "VRM 0.x conversion must bind _ShadeTexture when it " +
             "differs from _MainTex.")
     }
 
     /// Absent `_ShadeTexture` stays nil — don't fabricate a binding from
     /// `_MainTex`.
     func testShadeMultiplyTextureNilWhenShadeTextureAbsent() throws {
+        let textures = (0..<16).map { VRMTexture(name: "tex_\($0)") }
         var prop = VRM0MaterialProperty()
         prop.name = "test_no_shade_tex"
         prop.shader = "VRM/MToon"
         prop.textureProperties["_MainTex"] = 5
         // No _ShadeTexture key.
 
-        let mtoon = prop.toMToonMaterial()
+        let mtoon = prop.toMToonMaterial(textures: textures)
 
         XCTAssertNil(mtoon.shadeMultiplyTexture,
             "Conversion must not default shadeMultiplyTexture to _MainTex " +

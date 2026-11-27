@@ -113,14 +113,13 @@ final class SilhouetteRenderConfigTests: XCTestCase {
         let model = try await VRMModel.load(from: URL(fileURLWithPath: vrm10Path), device: device)
         let renderer = VRMRenderer(device: device)
 
-        XCTAssertFalse(renderer.disableAutoMaterialOverrides, "default off")
+        XCTAssertFalse(renderer.config.legacyMaterialHeuristics, "spec-driven default")
         XCTAssertFalse(renderer.additiveDirectionalRimEnabled, "default off")
 
         var config = SilhouetteRenderConfig()
         config.rimFresnelPower = 9.5
         renderer.applySilhouetteMode(model: model, config: config)
 
-        XCTAssertTrue(renderer.disableAutoMaterialOverrides)
         XCTAssertTrue(renderer.additiveDirectionalRimEnabled)
         XCTAssertEqual(renderer.additiveDirectionalRimPower, 9.5, accuracy: 0.0001)
     }
