@@ -251,6 +251,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     internal private(set) var physicsLayoutGeneration: UInt64 = 0
     /// Currently active composed host + cosmetic SpringBone layout.
     internal private(set) var activeLayout: ComposedSpringBoneLayout?
+    /// Layout last committed to GPU buffers by `populateSpringBoneData`; used by
+    /// `captureDynamicRebuildSnapshot` so intermediate cache refreshes can never
+    /// desynchronize snapshot capture from allocated buffers.
+    private var committedLayout: ComposedSpringBoneLayout?
     /// Honest sleep/wake policy. Velocities come from completed GPU snapshots.
     private var sleepGate = SpringBoneSleepGate(chainCount: 0)
     /// Velocity threshold in units/sec below which a chain may fall asleep.
@@ -1802,6 +1806,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             snapshotLock.unlock()
 
             activeLayout = nil
+            committedLayout = nil
             model.springBoneBuffers = nil
             chainRanges = []
             chainColliderMasks = []
@@ -1891,7 +1896,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     private func captureDynamicRebuildSnapshot(model: VRMModel) -> DynamicRebuildSnapshot {
         var chainsByKey: [[ObjectIdentifier]: PreservedChainState] = [:]
 
-        if let oldLayout = activeLayout,
+        if let oldLayout = committedLayout,
            let oldBuffers = model.springBoneBuffers,
            oldBuffers.numBones == oldLayout.totalBones,
            oldLayout.totalBones > 0 {
@@ -1985,6 +1990,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         snapshotLock.unlock()
 
         activeLayout = layout
+        committedLayout = layout
 
         var boneParams: [BoneParams] = []
         var restLengths: [Float] = []
@@ -2973,10 +2979,18 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
         // Re-compose layout whenever springBoneRevision or model changed so in-place
         // collider shape/node mutations (e.g. collider reattachment or offset edits)
-        // propagate into the flat collider tables immediately.
+        // propagate into the flat collider tables immediately — ONLY if the rebuilt
+        // layout matches the currently allocated GPU buffers. Structural add/remove
+        // changes defer to rebuildSpringBoneData so activeLayout never desyncs.
         if cachedCacheModelID != modelID || cachedSpringBoneRevision != model.springBoneRevision || activeLayout == nil {
-            if let rebuilt = try? ComposedSpringBoneLayout.build(model: model) {
-                activeLayout = rebuilt
+            if let buffers = model.springBoneBuffers,
+               let rebuilt = try? ComposedSpringBoneLayout.build(model: model),
+               rebuilt.totalBones == buffers.numBones,
+               rebuilt.chains.count == chainRanges.count {
+                let counts = rebuilt.colliderCounts()
+                if counts.spheres == buffers.numSpheres && counts.capsules == buffers.numCapsules {
+                    activeLayout = rebuilt
+                }
             }
         }
         if let layout = activeLayout {

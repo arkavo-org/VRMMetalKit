@@ -499,4 +499,64 @@ final class CosmeticSpringBoneTests: XCTestCase {
         try renderer.commitSpringBoneChanges(warmupNewChainSteps: 0)
         XCTAssertNil(host.springBoneBuffers)
     }
+
+    // MARK: - 8. PR Review Regression: Cache Refresh Before Dynamic Rebuild
+
+    func testCacheRefreshBeforeRebuildPreservesLayoutAndSurvivingChainContinuity() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal not available")
+        }
+
+        let model = try makeHostModel(device: device, withSpringBone: true)
+        let sys = try SpringBoneComputeSystem(device: device)
+        try sys.populateSpringBoneData(model: model)
+
+        // Advance simulation several frames so host chain has live momentum and completed snapshot
+        for _ in 0..<8 {
+            sys.update(model: model, deltaTime: 1.0 / 60.0)
+            sys.waitForPendingFrame()
+        }
+
+        // Inject distinctive live curr/prev velocity into surviving host chain tip (bone 2)
+        let buffersBefore = try XCTUnwrap(model.springBoneBuffers)
+        let currPtrBefore = try XCTUnwrap(buffersBefore.bonePosCurr).contents()
+            .bindMemory(to: SIMD3<Float>.self, capacity: buffersBefore.numBones)
+        let prevPtrBefore = try XCTUnwrap(buffersBefore.bonePosPrev).contents()
+            .bindMemory(to: SIMD3<Float>.self, capacity: buffersBefore.numBones)
+        let distinctCurr = SIMD3<Float>(0.37, 1.12, -0.21)
+        let distinctPrev = SIMD3<Float>(0.34, 1.13, -0.20)
+        currPtrBefore[2] = distinctCurr
+        prevPtrBefore[2] = distinctPrev
+
+        // Attach a new physics cosmetic (bumps springBoneRevision & physicsRevision)
+        let tail = makeSpringBoneCosmeticAsset(name: "Tail")
+        _ = try model.attach(tail, to: .hips)
+
+        // Trigger ensureTargetCaptureCaches BEFORE rebuildSpringBoneData (e.g., warmup/update outside drawCore)
+        sys.update(model: model, deltaTime: 1.0 / 60.0)
+        sys.waitForPendingFrame()
+
+        // activeLayout MUST still match the currently allocated 3-bone host GPU buffers
+        XCTAssertEqual(sys.activeLayout?.totalBones, 3)
+
+        // Capture live simulated tip position right before rebuild
+        let preRebuildCurr = currPtrBefore[2]
+        let preRebuildPrev = prevPtrBefore[2]
+
+        // Now perform the dynamic rebuild; surviving host chain MUST retain continuity
+        try sys.rebuildSpringBoneData(model: model, warmupNewChainSteps: 6)
+        XCTAssertEqual(sys.activeLayout?.totalBones, 6)
+
+        let buffersAfter = try XCTUnwrap(model.springBoneBuffers)
+        XCTAssertEqual(buffersAfter.numBones, 6)
+        let currPtrAfter = try XCTUnwrap(buffersAfter.bonePosCurr).contents()
+            .bindMemory(to: SIMD3<Float>.self, capacity: buffersAfter.numBones)
+        let prevPtrAfter = try XCTUnwrap(buffersAfter.bonePosPrev).contents()
+            .bindMemory(to: SIMD3<Float>.self, capacity: buffersAfter.numBones)
+
+        XCTAssertLessThan(simd_distance(currPtrAfter[2], preRebuildCurr), 1e-3,
+            "Surviving host chain position must be preserved even when cache refresh ran before rebuild")
+        XCTAssertLessThan(simd_distance(prevPtrAfter[2], preRebuildPrev), 1e-3,
+            "Surviving host chain momentum must be preserved even when cache refresh ran before rebuild")
+    }
 }
