@@ -52,6 +52,7 @@ import Synchronization
 final class SpringBoneComputeSystem: @unchecked Sendable {
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
+    let supportsNonUniformThreadgroups: Bool
 
     private var kinematicPipeline: MTLComputePipelineState?
     private var copyParentPositionsPipeline: MTLComputePipelineState?
@@ -453,9 +454,21 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// GPU, not for completion handlers that run on a separate queue.
     private var pendingSnapshotSemaphore: DispatchSemaphore?
 
-    init(device: MTLDevice) throws {
+    static func deviceSupportsNonUniformThreadgroups(_ device: MTLDevice) -> Bool {
+        device.supportsFamily(.apple4) || device.supportsFamily(.mac2)
+    }
+
+    convenience init(device: MTLDevice) throws {
+        try self.init(
+            device: device,
+            supportsNonUniformThreadgroups: Self.deviceSupportsNonUniformThreadgroups(device)
+        )
+    }
+
+    init(device: MTLDevice, supportsNonUniformThreadgroups: Bool) throws {
         self.device = device
         self.commandQueue = MetalQueueFactory.makeCommandQueue(device: device)!
+        self.supportsNonUniformThreadgroups = supportsNonUniformThreadgroups
 
         // Load compute shaders from pre-compiled .metallib
         var library: MTLLibrary?
@@ -986,6 +999,44 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         lastUpdateTime = CACurrentMediaTime()
     }
 
+    /// Computes the number of whole threadgroups needed to cover `threadsPerGrid`.
+    static func threadgroupGridSize(
+        for threadsPerGrid: MTLSize,
+        threadsPerThreadgroup: MTLSize
+    ) -> MTLSize {
+        MTLSize(
+            width: (threadsPerGrid.width + threadsPerThreadgroup.width - 1) / threadsPerThreadgroup.width,
+            height: (threadsPerGrid.height + threadsPerThreadgroup.height - 1) / threadsPerThreadgroup.height,
+            depth: (threadsPerGrid.depth + threadsPerThreadgroup.depth - 1) / threadsPerThreadgroup.depth
+        )
+    }
+
+    /// Dispatches compute work using non-uniform threadgroups when the device supports
+    /// `.apple4` or `.mac2`, falling back to rounded-up whole threadgroups otherwise
+    /// (e.g. on iOS/visionOS Simulator GPUs). Every SpringBone kernel guards on
+    /// `id >= count`, so surplus tail lanes exit immediately.
+    static func dispatchCompute(
+        _ encoder: MTLComputeCommandEncoder,
+        threadsPerGrid: MTLSize,
+        threadsPerThreadgroup: MTLSize,
+        supportsNonUniformThreadgroups: Bool
+    ) {
+        assert(threadsPerGrid.width > 0 && threadsPerGrid.height > 0 && threadsPerGrid.depth > 0,
+               "SpringBone compute dispatch grid dimensions must be positive")
+        guard threadsPerGrid.width > 0, threadsPerGrid.height > 0, threadsPerGrid.depth > 0 else {
+            return
+        }
+        if supportsNonUniformThreadgroups {
+            encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerThreadgroup)
+        } else {
+            let threadgroups = threadgroupGridSize(
+                for: threadsPerGrid,
+                threadsPerThreadgroup: threadsPerThreadgroup
+            )
+            encoder.dispatchThreadgroups(threadgroups, threadsPerThreadgroup: threadsPerThreadgroup)
+        }
+    }
+
     private func executeXPBDStep(buffers: SpringBoneBuffers,
                                   globalParams: SpringBoneGlobalParams,
                                   sharedCommandBuffer: MTLCommandBuffer? = nil,
@@ -1020,13 +1071,23 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         let numBones = buffers.numBones
         let threadgroupSize = MTLSize(width: 256, height: 1, depth: 1)
-        let gridSize = MTLSize(width: numBones, height: 1, depth: 1) // Exact thread count for Metal
+        let gridSize = MTLSize(width: numBones, height: 1, depth: 1)
+        let useNonUniform = supportsNonUniformThreadgroups
 
         // Create compute encoder
         guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
             return
         }
         computeEncoder.label = "SpringBone Compute"
+
+        let dispatch = { (grid: MTLSize) in
+            Self.dispatchCompute(
+                computeEncoder,
+                threadsPerGrid: grid,
+                threadsPerThreadgroup: threadgroupSize,
+                supportsNonUniformThreadgroups: useNonUniform
+            )
+        }
 
         // Set buffers
         computeEncoder.setBuffer(boneChainIndexBuffer, offset: 0, index: 16)
@@ -1087,7 +1148,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             computeEncoder.setBuffer(numRootBonesBuffer, offset: 0, index: 10)
             computeEncoder.setBuffer(animatedRootPositionsPrevBuffer, offset: 0, index: 12)
             let rootGridSize = MTLSize(width: rootBoneIndices.count, height: 1, depth: 1)
-            computeEncoder.dispatchThreads(rootGridSize, threadsPerThreadgroup: threadgroupSize)
+            dispatch(rootGridSize)
             computeEncoder.memoryBarrier(scope: .buffers)
         }
 
@@ -1109,14 +1170,14 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             var numRecordsU32 = UInt32(recordCount)
             computeEncoder.setBytes(&numRecordsU32, length: MemoryLayout<UInt32>.size, index: 14)
             let recordGridSize = MTLSize(width: recordCount, height: 1, depth: 1)
-            computeEncoder.dispatchThreads(recordGridSize, threadsPerThreadgroup: threadgroupSize)
+            dispatch(recordGridSize)
             computeEncoder.memoryBarrier(scope: .buffers)
         }
 
         let serializeBones = testSerializeBoneDispatches
         let dispatchBones = { [boneChainIndexBuffer, chainSleepBuffer] in
             guard serializeBones else {
-                computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+                dispatch(gridSize)
                 computeEncoder.memoryBarrier(scope: .buffers)
                 return
             }
@@ -1126,7 +1187,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 var asleep = [UInt32](repeating: 1, count: numBones)
                 asleep[bone] = 0
                 computeEncoder.setBytes(&asleep, length: numBones * MemoryLayout<UInt32>.stride, index: 17)
-                computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+                dispatch(gridSize)
                 computeEncoder.memoryBarrier(scope: .buffers)
             }
             computeEncoder.setBuffer(boneChainIndexBuffer, offset: 0, index: 16)
@@ -1138,7 +1199,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // the result cannot depend on the order the GPU runs SIMD groups (#452).
         let copyParentPositions = {
             computeEncoder.setComputePipelineState(copyParentPositionsPipeline)
-            computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+            dispatch(gridSize)
             computeEncoder.memoryBarrier(scope: .buffers)
         }
 
