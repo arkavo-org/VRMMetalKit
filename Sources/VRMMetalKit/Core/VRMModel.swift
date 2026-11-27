@@ -305,6 +305,21 @@ public class VRMModel: VRMSceneContent, @unchecked Sendable {
     /// per-vertex hidden-flag buffers.
     internal var bodyMaskLayers: [String: [ObjectIdentifier: [UInt8]]] = [:]
 
+    /// Runtime floor planes configured via ``setFloorPlane(at:)`` / ``setFloorPlane(arkitTransform:)``
+    /// so they survive dynamic SpringBone buffer reallocations across cosmetic attach/detach.
+    internal var runtimeFloorPlanes: [PlaneCollider] = []
+
+    /// Cached host-only synthetic colliders for avatars that have no base `springBone`
+    /// but later attach a SpringBone cosmetic (never refit onto attached cosmetics).
+    internal var cachedHostSyntheticColliders: [VRMCollider]? = nil
+
+    /// Returns `true` when either the base model or any attached cosmetic carries SpringBone data.
+    /// Caller must hold `lock`.
+    internal func hasAnySpringBoneLocked() -> Bool {
+        if springBone != nil { return true }
+        return attachments.contains { $0.springBone != nil }
+    }
+
     /// Returns `[self] + attachments` for uniform rendering traversal. Caller must hold `lock`.
     internal func allSceneContentsLocked() -> [any VRMSceneContent] {
         var result: [any VRMSceneContent] = [self]
@@ -1125,6 +1140,7 @@ public class VRMModel: VRMSceneContent, @unchecked Sendable {
     /// ```
     public func setFloorPlane(at floorY: Float) {
         let floor = PlaneCollider(floorY: floorY, groupMask: 1)
+        runtimeFloorPlanes = [floor]
         springBoneBuffers?.setPlaneColliders([floor])
         springBoneGlobalParams?.numPlanes = 1
     }
@@ -1137,6 +1153,7 @@ public class VRMModel: VRMSceneContent, @unchecked Sendable {
     /// - Parameter transform: The `ARPlaneAnchor.transform` matrix.
     public func setFloorPlane(arkitTransform transform: simd_float4x4) {
         let floor = PlaneCollider(arkitTransform: transform, groupMask: 1)
+        runtimeFloorPlanes = [floor]
         springBoneBuffers?.setPlaneColliders([floor])
         springBoneGlobalParams?.numPlanes = 1
     }
@@ -1145,6 +1162,7 @@ public class VRMModel: VRMSceneContent, @unchecked Sendable {
     ///
     /// Call this when the avatar is no longer grounded (e.g., jumping, flying).
     public func removeFloorPlane() {
+        runtimeFloorPlanes = []
         springBoneBuffers?.setPlaneColliders([])
         springBoneGlobalParams?.numPlanes = 0
     }

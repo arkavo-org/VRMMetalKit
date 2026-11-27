@@ -243,7 +243,18 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// attribute motion to individual spring chains for per-chain sleep decisions.
     private var chainRanges: [Range<Int>] = []
     /// Per-chain collider-group masks (same bits written into `BoneParams`).
-    private var chainColliderMasks: [UInt32] = []
+    internal private(set) var chainColliderMasks: [UInt32] = []
+    /// Monotonically incremented on every layout rebuild under `snapshotLock` so
+    /// in-flight async GPU completion handlers from an earlier layout are cleanly
+    /// discarded even on the shared command-buffer path where `waitForPendingFrame()`
+    /// is a no-op.
+    internal private(set) var physicsLayoutGeneration: UInt64 = 0
+    /// Currently active composed host + cosmetic SpringBone layout.
+    internal private(set) var activeLayout: ComposedSpringBoneLayout?
+    /// Layout last committed to GPU buffers by `populateSpringBoneData`; used by
+    /// `captureDynamicRebuildSnapshot` so intermediate cache refreshes can never
+    /// desynchronize snapshot capture from allocated buffers.
+    private var committedLayout: ComposedSpringBoneLayout?
     /// Honest sleep/wake policy. Velocities come from completed GPU snapshots.
     private var sleepGate = SpringBoneSleepGate(chainCount: 0)
     /// Velocity threshold in units/sec below which a chain may fall asleep.
@@ -342,25 +353,27 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     // node rather than accumulating inertia from the avatar's locomotion.
     struct CenterSpringRecord {
         var centerNodeIndex: Int
+        var centerNode: VRMNode?
+        var centerNodeID: ObjectIdentifier?
         var boneStart: Int
         var boneCount: Int
     }
     var centerSpringRecords: [CenterSpringRecord] = []
-    private var previousCenterWorldMatrices: [Int: float4x4] = [:]
+    private var previousCenterWorldMatrices: [ObjectIdentifier: float4x4] = [:]
     /// Per-frame snapshot of each center node's *target* worldMatrix
     /// captured at the top of `update()`, consumed when the host
     /// pre-computes per-substep deltas into `centerDeltaBuffer` (VMK#295).
-    private var targetCenterWorldMatrices: [Int: float4x4] = [:]
+    private var targetCenterWorldMatrices: [ObjectIdentifier: float4x4] = [:]
     /// GPU-side per-(substep × record) center delta entries — see
     /// `springBoneApplyCenterDelta` (`SpringBoneCenterDelta.metal`). Filled
     /// once per frame at the top of `update()` and dispatched per substep
     /// in `executeXPBDStep`. Allocated lazily once `centerSpringRecords`
     /// is non-empty.
     private var centerDeltaBuffer: MTLBuffer?
-    /// Reused per-frame cache of computed center deltas keyed by center node index
+    /// Reused per-frame cache of computed center deltas keyed by center node identity
     /// so springs sharing a center node (e.g. 68 springs all referencing root)
     /// invert the center matrix once per substep instead of once per spring (#222).
-    private var centerDeltaScratch: [Int: float4x4] = [:]
+    private var centerDeltaScratch: [ObjectIdentifier: float4x4] = [:]
 
     /// 80-byte mirror of the `CenterDeltaRecord` struct in
     /// `SpringBoneCenterDelta.metal` (4 × uint header + 4×4 float matrix).
@@ -1180,6 +1193,12 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         let capturedBonePosCurr = buffers.bonePosCurr
         let capturedBonePosPrev = buffers.bonePosPrev
         let capturedNumBones = buffers.numBones
+        let capturedRanges = chainRanges
+        let capturedGeneration: UInt64 = {
+            snapshotLock.lock()
+            defer { snapshotLock.unlock() }
+            return physicsLayoutGeneration
+        }()
 
         // For self-owned command buffers, allocate a semaphore so callers can
         // block on the snapshot actually being captured (the handler runs on
@@ -1215,7 +1234,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 self.captureCompletedPositions(bonePosCurr: capturedBonePosCurr,
                                                bonePosPrev: capturedBonePosPrev,
                                                numBones: capturedNumBones,
-                                               frameID: frameID)
+                                               frameID: frameID,
+                                               generation: capturedGeneration,
+                                               chainRangesSnapshot: capturedRanges)
             }
         }
 
@@ -1688,522 +1709,279 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         SpringBoneContactColliderSet.worldTorsoCapsule(model: model)
     }
 
-    func populateSpringBoneData(model: VRMModel) throws {
-        guard let springBone = model.springBone,
-              let buffers = model.springBoneBuffers,
-              let _ = model.device else {
+    // MARK: - Dynamic Rebuild Continuity Snapshot
+
+    private struct PreservedChainState {
+        let currPositions: [SIMD3<Float>]
+        let prevPositions: [SIMD3<Float>]
+        let isAsleep: Bool
+        let sleepCounter: Int
+        let previousRootPos: SIMD3<Float>?
+        let lastRootPos: SIMD3<Float>?
+        let previousBindDirs: [SIMD3<Float>]
+    }
+
+    private struct DynamicRebuildSnapshot {
+        var chainsByKey: [[ObjectIdentifier]: PreservedChainState]
+        var previousCenterWorldMatrices: [ObjectIdentifier: float4x4]
+        var pendingForeignSnapshot: ForeignColliderSnapshot
+        var pendingExternalColliders: ForeignColliderSnapshot
+        var previousForeignForSleep: ForeignColliderSnapshot
+        var previousExternalForSleep: ForeignColliderSnapshot
+    }
+
+    private static func bindPosition(of matrix: float4x4) -> SIMD3<Float> {
+        SIMD3<Float>(matrix.columns.3.x, matrix.columns.3.y, matrix.columns.3.z)
+    }
+
+    /// Computes bind-pose rest length between `parentNode` and `node` using immutable
+    /// `initialTranslation/Rotation/Scale` (immune to live animation), falling back to
+    /// live `worldPosition` only when a synthetic test node has zero initial separation.
+    private static func computeBindRestLength(parent: VRMNode, child: VRMNode) -> Float {
+        let parentBindPos = bindPosition(of: VRMSkeletonRemapper.bindWorldMatrix(of: parent))
+        let childBindPos = bindPosition(of: VRMSkeletonRemapper.bindWorldMatrix(of: child))
+        let bindDist = simd_distance(childBindPos, parentBindPos)
+        if bindDist > 1e-4 {
+            return bindDist
+        }
+        return simd_distance(child.worldPosition, parent.worldPosition)
+    }
+
+    /// Computes immutable bind-pose local direction from `currentNode` to `nextNode` in
+    /// `currentNode.parent`'s bind frame, falling back to live world matrices for
+    /// synthetic test nodes with zero initial separation.
+    private func computeBindLocalDirection(current: VRMNode, next: VRMNode) -> SIMD3<Float> {
+        let curBindMat = VRMSkeletonRemapper.bindWorldMatrix(of: current)
+        let nextBindMat = VRMSkeletonRemapper.bindWorldMatrix(of: next)
+        let curBindPos = Self.bindPosition(of: curBindMat)
+        let nextBindPos = Self.bindPosition(of: nextBindMat)
+        let bindDelta = nextBindPos - curBindPos
+        if simd_length(bindDelta) > 1e-4 {
+            let bindDirWorld = simd_normalize(bindDelta)
+            if let parentNode = current.parent {
+                let parentBindMat = VRMSkeletonRemapper.bindWorldMatrix(of: parentNode)
+                let parentRot = simd_normalize(extractRotation(from: parentBindMat))
+                return simd_act(simd_conjugate(parentRot), bindDirWorld)
+            }
+            return bindDirWorld
+        }
+        let liveDelta = next.worldPosition - current.worldPosition
+        let liveDir = simd_length(liveDelta) > 1e-4 ? simd_normalize(liveDelta) : SIMD3<Float>(0, -1, 0)
+        if let parentNode = current.parent {
+            let parentRot = simd_normalize(extractRotation(from: parentNode.worldMatrix))
+            return simd_act(simd_conjugate(parentRot), liveDir)
+        }
+        return liveDir
+    }
+
+    /// Dynamically rebuilds the single-solver GPU buffers and simulation tables after
+    /// attaching or detaching SpringBone cosmetics, preserving live momentum, sleep
+    /// state, center-frame history, foreign/external colliders, and floor planes for
+    /// all surviving chains while selectively warming up ONLY newly attached chains.
+    func rebuildSpringBoneData(
+        model: VRMModel,
+        warmupNewChainSteps: Int = 15,
+        limits: VRMLoaderLimits = .default
+    ) throws {
+        // Drain any self-owned pending GPU work first.
+        waitForPendingFrame()
+
+        guard let device = model.device ?? self.device as MTLDevice? else { return }
+
+        // 1. Capture live state of surviving chains before reallocating buffers.
+        let snapshot = captureDynamicRebuildSnapshot(model: model)
+
+        // 2. Compose the unified host + attachment layout (enforcing <= 29 authored groups).
+        let newLayout = try ComposedSpringBoneLayout.build(model: model)
+
+        if newLayout.totalBones == 0 {
+            // No chains remain (e.g. last physics cosmetic detached from a no-spring host).
+            snapshotLock.lock()
+            physicsLayoutGeneration &+= 1
+            latestPositionsSnapshot.removeAll(keepingCapacity: true)
+            latestPrevPositionsSnapshot.removeAll(keepingCapacity: true)
+            completedChainVelocities.removeAll(keepingCapacity: true)
+            latestCompletedFrame = 0
+            lastAppliedFrame = 0
+            snapshotLock.unlock()
+
+            activeLayout = nil
+            committedLayout = nil
+            model.springBoneBuffers = nil
+            chainRanges = []
+            chainColliderMasks = []
+            rootBoneIndices = []
+            sleepGate = SpringBoneSleepGate(chainCount: 0)
+            allocateSleepBuffers(numBones: 0, chainCount: 0)
+            centerSpringRecords.removeAll(keepingCapacity: true)
+            centerDeltaBuffer = nil
+            cachedRootNodes.removeAll(keepingCapacity: true)
+            cachedBindDirEntries.removeAll(keepingCapacity: true)
+            cachedSphereColliders.removeAll(keepingCapacity: true)
+            cachedCapsuleColliders.removeAll(keepingCapacity: true)
+            cachedPlaneColliders.removeAll(keepingCapacity: true)
             return
         }
 
-        var boneParams: [BoneParams] = []
-        var restLengths: [Float] = []
-        var parentIndices: [Int] = []  // CPU-side parent indices for physics reset
-        var sphereColliders: [SphereCollider] = []
-        var capsuleColliders: [CapsuleCollider] = []
-        var planeColliders: [PlaneCollider] = []
-        boneBindDirections = [] // Reset bind directions (current→child)
-
-        // Reset the foreign-collider sink (design §7) so a freshly populated
-        // model starts with zero foreign injection. Without this, stale
-        // foreign state from a previously loaded model would carry across
-        // loadModel() calls on this reused compute system. The sleep snapshots
-        // reset too — otherwise the stale previous set diffs against the new
-        // model's empty set and triggers one spurious wake after reload.
-        pendingForeignSnapshot = ForeignColliderSnapshot()
-        pendingExternalColliders = ForeignColliderSnapshot()
-        previousForeignForSleep = ForeignColliderSnapshot()
-        previousExternalForSleep = ForeignColliderSnapshot()
-        activeForeignSpheres = 0
-        activeForeignCapsules = 0
-
-        // Build collider-to-group-MEMBERSHIP mapping: every collider carries the
-        // OR of the bits of ALL groups it belongs to (a collider shared by
-        // several groups — e.g. one chest capsule in both a "Body" and a "Hair"
-        // group — must be visible to springs referencing ANY of them; the
-        // previous first-group-only index silently dropped the others).
-        // Clamp each bit to 31 so the shader's `1u << bit` is well-defined
-        // (UB at >=32). Bone masks are already truncated to <32.
-        var colliderToGroupMask: [Int: UInt32] = [:]
-        for (groupIndex, group) in springBone.colliderGroups.enumerated() {
-            let bit = UInt32(1 << min(groupIndex, 31))
-            for colliderIndex in group.colliders {
-                colliderToGroupMask[colliderIndex, default: 0] |= bit
-            }
-        }
-
-        // Synthetic colliders (issue #309) live in a reserved group bit so EVERY
-        // spring collides with them, regardless of authored group membership.
-        // Clamp to 31 so the bit shift stays well-defined. Only
-        // reserve the bit when synthetic colliders actually exist — otherwise the
-        // reserved bit could alias an authored group's clamped bit (models with
-        // >=32 groups all clamp to 31) and leak authored colliders through the
-        // spring filter.
-        let syntheticGroupIndex = UInt32(min(springBone.colliderGroups.count, 31))
-        let hasSyntheticColliders = !springBone.syntheticColliders.isEmpty && springBone.colliderGroups.count < 32
-        let syntheticGroupBit: UInt32 = hasSyntheticColliders ? (1 << syntheticGroupIndex) : 0
-        // Scope swept (continuous) sphere collision to the synthetic group only
-        // (#313), as the precomputed group BIT the shader ANDs against each
-        // collider's `groupMask`. No synthetic colliders → 0 → matches nothing.
-        sweptColliderGroupMask = syntheticGroupBit
-
-        // Reserve the foreign group bit (design §7), distinct from synthetic and
-        // OR'd into every spring bone unconditionally — harmless when idle (no
-        // foreign colliders ⇒ the bit matches nothing). Only reserve the slot
-        // when `colliderGroups.count + 1` stays clear of the authored overflow
-        // clamp at 31 (models with >=32 authored groups already clamp their
-        // overflow colliders' group bits to 31 — see the `colliderToGroupMask`
-        // clamp above). Below that ceiling, `count` and `count + 1` are both
-        // <31 and distinct from each other and from every authored index, so
-        // synthetic (`count`) and foreign (`count + 1`) can never collide with
-        // an authored bit or with one another. Above it, skip the reservation
-        // rather than risk leaking authored colliders through the spring
-        // filter (matches the `hasSyntheticColliders` guard's rationale).
-        let foreignSlotIsSafe = springBone.colliderGroups.count < 30
-        foreignColliderGroupIndex = foreignSlotIsSafe
-            ? UInt32(springBone.colliderGroups.count + 1)
-            : 0xFFFFFFFF
-        let foreignGroupBit: UInt32 = foreignSlotIsSafe ? (1 << foreignColliderGroupIndex) : 0
-
-        // Process spring chains to extract bone parameters
-        var boneIndex = 0
-        rootBoneIndices = []
-        chainColliderMasks = []
-
-        // Track chains with all-zero gravityPower for auto-fix
-        var chainGravityPowers: [[Float]] = []
-
-        for spring in springBone.springs {
-            // VRMExtensionParser lets a spring with zero joints through
-            // unfiltered (every joint dict missing "node"). `chainRanges` /
-            // `sleepGate` / `rootBoneIndices` only grow for springs that
-            // contribute at least one bone, so a per-spring array must skip
-            // empty springs too or every later chain's index shifts by one.
-            guard !spring.joints.isEmpty else { continue }
-
-            var jointIndexInChain = 0
-            var chainGravityPower: [Float] = []
-
-            // Build collision group mask for this spring chain
-            // Each bit represents a collision group that this spring interacts with
-            var colliderGroupMask: UInt32 = 0
-            if spring.colliderGroups.isEmpty {
-                // No groups specified - collide with all groups (backward compatible default)
-                colliderGroupMask = 0xFFFFFFFF
-            } else {
-                for groupIndex in spring.colliderGroups {
-                    if groupIndex < 32 {
-                        colliderGroupMask |= (1 << groupIndex)
-                    }
-                }
-            }
-            // Always collide with synthetic colliders (issue #309). Harmless when
-            // the mask is already the 0xFFFFFFFF all-groups default.
-            colliderGroupMask |= syntheticGroupBit
-            // Always collide with the reserved foreign group (design §7) so
-            // cross-avatar colliders, once injected into the tail, affect every
-            // spring bone regardless of authored group membership.
-            colliderGroupMask |= foreignGroupBit
-            // The `Bust` spring IS the breast surface — the #377 breast collider is
-            // fitted to the mesh it skins, so it ENCLOSES this spring's own joints.
-            // Left colliding, that collider shoves the bust joints out of
-            // themselves every frame and hair contact reads as breast jiggle.
-            // Clear the synthetic bit (works even from the 0xFFFFFFFF default) so
-            // the bust spring ignores every synthetic body collider, while hair
-            // and cloth springs still collide with the breast collider normally.
-            if (spring.name ?? "").lowercased().contains("bust") {
-                colliderGroupMask &= ~syntheticGroupBit
-            }
-            chainColliderMasks.append(colliderGroupMask)
-
-            for joint in spring.joints {
-                chainGravityPower.append(joint.gravityPower)
-
-                // First joint in each spring chain is a root
-                let isRootBone = (jointIndexInChain == 0)
-
-                if isRootBone {
-                    rootBoneIndices.append(UInt32(boneIndex))
-                }
-
-                // Normalize gravity direction to ensure unit vector for GPU
-                let normalizedGravityDir = simd_length(joint.gravityDir) > 0.001
-                    ? simd_normalize(joint.gravityDir)
-                    : SIMD3<Float>(0, -1, 0) // Default downward if zero vector
-
-                // Calculate parent index (-1 for root bones)
-                let parentIdx = (isRootBone || jointIndexInChain == 0) ? -1 : (boneIndex - 1)
-                parentIndices.append(parentIdx)
-
-                let jointName = model.nodes[safe: joint.node]?.name
-                let clamped = springBoneOverride.apply(
-                    stiffness: joint.stiffness,
-                    dragForce: joint.dragForce,
-                    gravityPower: joint.gravityPower,
-                    jointName: jointName
-                )
-
-                let params = BoneParams(
-                    stiffness: clamped.stiffness,
-                    drag: clamped.dragForce,
-                    radius: joint.hitRadius,
-                    // Only set parent for non-root bones within the same chain
-                    parentIndex: parentIdx < 0 ? 0xFFFFFFFF : UInt32(parentIdx),
-                    gravityPower: clamped.gravityPower,
-                    colliderGroupMask: colliderGroupMask,
-                    gravityDir: normalizedGravityDir,
-                    angleLimit: joint.angleLimit
-                )
-                boneParams.append(params)
-
-                // Calculate rest length (distance to parent in bind pose)
-                if jointIndexInChain > 0, let node = model.nodes[safe: joint.node],
-                   let parentJoint = spring.joints[safe: jointIndexInChain - 1],
-                   let parentNode = model.nodes[safe: parentJoint.node] {
-                    let restLength = simd_distance(node.worldPosition, parentNode.worldPosition)
-                    restLengths.append(restLength)
-                } else {
-                    restLengths.append(0.0) // Root bone has no rest length
-                }
-
-                // Store bind-pose direction for THIS bone (looking ahead to NEXT bone)
-                // CRITICAL: Store in PARENT's local space, not current bone's local space
-                guard let currentNode = model.nodes[safe: joint.node] else {
-                    // Fallback for invalid node - try to get real direction from next joint if possible
-                    if let nextJoint = spring.joints[safe: jointIndexInChain + 1],
-                       let nextNode = model.nodes[safe: nextJoint.node],
-                       jointIndexInChain > 0,
-                       let prevJoint = spring.joints[safe: jointIndexInChain - 1],
-                       let prevNode = model.nodes[safe: prevJoint.node] {
-                        let bindDirWorld = simd_normalize(nextNode.worldPosition - prevNode.worldPosition)
-                        boneBindDirections.append(bindDirWorld)
-                    } else {
-                        boneBindDirections.append(SIMD3<Float>(0, 1, 0)) // Ultimate fallback
-                    }
-                    boneIndex += 1
-                    jointIndexInChain += 1
-                    continue
-                }
-
-                // BIND DIRECTION: current → child
-                // - Used for ROTATION calculation in Swift
-                // - Used for GPU STIFFNESS via bindDirections[parentIndex] in shader
-                if let nextJoint = spring.joints[safe: jointIndexInChain + 1],
-                   let nextNode = model.nodes[safe: nextJoint.node] {
-                    let bindDirWorld = simd_normalize(nextNode.worldPosition - currentNode.worldPosition)
-                    if let parentNode = currentNode.parent {
-                        let parentRot = extractRotation(from: parentNode.worldMatrix)
-                        let parentRotInv = simd_conjugate(parentRot)
-                        boneBindDirections.append(simd_act(parentRotInv, bindDirWorld))
-                    } else {
-                        boneBindDirections.append(bindDirWorld)
-                    }
-                } else {
-                    // Last bone - no child, use downward
-                    boneBindDirections.append(SIMD3<Float>(0, -1, 0))
-                }
-
-                boneIndex += 1
-                jointIndexInChain += 1
-            }
-
-            chainGravityPowers.append(chainGravityPower)
-        }
-
-        // Build contiguous per-chain bone ranges from root indices for sleep-gate tracking.
-        chainRanges = computeChainRanges(numBones: boneIndex)
-        sleepGate = SpringBoneSleepGate(chainCount: chainRanges.count)
-        allocateSleepBuffers(numBones: boneIndex, chainCount: chainRanges.count)
-
-        // NOTE: Auto-fix for zero gravityPower removed - it was overriding intentional zero gravity
-        // Real VRM files with broken physics should be fixed at the source or use a dedicated flag
-        // to enable auto-fixing behavior rather than applying it unconditionally.
-
-        // Process colliders with group membership masks
-        for (colliderIndex, collider) in springBone.colliders.enumerated() {
-            guard let colliderNode = model.nodes[safe: collider.node] else { continue }
-            let groupMask = colliderToGroupMask[colliderIndex] ?? 1   // no group ⇒ bit 0 (legacy default)
-
-            // Extract rotation from world matrix (upper 3x3) to transform local offsets
-            let wm = colliderNode.worldMatrix
-            let worldRotation = simd_float3x3(
-                SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
-                SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
-                SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2])
+        // Enforce bone quota against limits.
+        if newLayout.totalBones > limits.maxSpringBones {
+            throw VRMError.limitExceeded(
+                kind: "springBones",
+                limit: limits.maxSpringBones,
+                observed: newLayout.totalBones
             )
-
-            // Non-unit node scale: offsets/tails ARE scaled by the 3x3 but the
-            // radius never is, so the collision volume silently mismatches the
-            // mesh. Warn once per populate so the model can be fixed at the source.
-            let scaleX = simd_length(worldRotation.columns.0)
-            let scaleY = simd_length(worldRotation.columns.1)
-            let scaleZ = simd_length(worldRotation.columns.2)
-            if abs(scaleX - 1) > 0.01 || abs(scaleY - 1) > 0.01 || abs(scaleZ - 1) > 0.01 {
-                vrmLogPhysics("⚠️ [SpringBone] collider \(colliderIndex) on node \(collider.node) has non-unit world scale (\(String(format: "%.3f", scaleX)), \(String(format: "%.3f", scaleY)), \(String(format: "%.3f", scaleZ))): offsets scale but radius does not — collision geometry may not match the mesh")
-            }
-
-            switch collider.shape {
-            case .sphere(let offset, let radius):
-                let worldOffset = worldRotation * offset
-                let worldCenter = colliderNode.worldPosition + worldOffset
-                sphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupMask: groupMask))
-
-            case .insideSphere(let offset, let radius):
-                let worldOffset = worldRotation * offset
-                let worldCenter = colliderNode.worldPosition + worldOffset
-                sphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupMask: groupMask, inside: true))
-
-            case .capsule(let offset, let radius, let tail):
-                let worldP0 = colliderNode.worldPosition + worldRotation * offset
-                let worldP1 = colliderNode.worldPosition + worldRotation * tail
-                capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupMask: groupMask))
-
-            case .insideCapsule(let offset, let radius, let tail):
-                let worldP0 = colliderNode.worldPosition + worldRotation * offset
-                let worldP1 = colliderNode.worldPosition + worldRotation * tail
-                capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupMask: groupMask, inside: true))
-
-            case .plane(let offset, let normal):
-                let worldOffset = worldRotation * offset
-                let worldNormal = worldRotation * normal
-                let worldPoint = colliderNode.worldPosition + worldOffset
-                let normalizedNormal = simd_length(worldNormal) > 0.001 ? simd_normalize(worldNormal) : SIMD3<Float>(0, 1, 0)
-                planeColliders.append(PlaneCollider(point: worldPoint, normal: normalizedNormal, groupMask: groupMask))
-            }
         }
 
-        // Append synthetic colliders (issue #309) via the shared helper. They
-        // live in the reserved synthetic group so every spring collides with them.
-        if hasSyntheticColliders {
-            appendSyntheticColliders(
-                springBone.syntheticColliders, model: model, groupMask: syntheticGroupBit,
-                spheres: &sphereColliders, capsules: &capsuleColliders)
-        }
+        // 3. Allocate fresh GPU buffers sized for the composed layout.
+        let counts = newLayout.colliderCounts()
+        let reserve = model.reservesForeignColliderTail
+        let foreignSphereSlots = reserve
+            ? VRMConstants.Physics.maxContactPartners * VRMConstants.Physics.foreignSphereSlotsPerPartner
+                + VRMConstants.Physics.externalColliderSphereSlots
+            : 0
+        let foreignCapsuleSlots = reserve
+            ? VRMConstants.Physics.maxContactPartners * VRMConstants.Physics.foreignCapsuleSlotsPerPartner
+                + VRMConstants.Physics.externalColliderCapsuleSlots
+            : 0
 
-        // Update buffers
-        buffers.updateBoneParameters(boneParams)
-        let chainSyntheticEnabled = chainColliderMasks.map { ($0 & syntheticGroupBit) != 0 }
-        let ringDetection = SpringBoneSkirtRingDetector.buildCollisionAux(
-            model: model,
-            hasSyntheticColliders: hasSyntheticColliders,
-            chainSyntheticEnabled: chainSyntheticEnabled
+        let authoredPlaneCount = counts.planes
+        let floorPlaneCount = model.runtimeFloorPlanes.count
+        let totalPlaneCount = max(authoredPlaneCount, floorPlaneCount)
+
+        let freshBuffers = SpringBoneBuffers(device: device)
+        try freshBuffers.allocateBuffers(
+            numBones: newLayout.totalBones,
+            numSpheres: counts.spheres,
+            numCapsules: counts.capsules,
+            numPlanes: totalPlaneCount,
+            foreignSphereSlots: foreignSphereSlots,
+            foreignCapsuleSlots: foreignCapsuleSlots,
+            limits: limits
         )
-        let auxUploaded = buffers.updateCollisionAux(ringDetection.aux)
-        hasRingNeighbors = auxUploaded && ringDetection.hasRingNeighbors
-        ringChainComponents = hasRingNeighbors ? ringDetection.ringChainComponents : []
-        buffers.updateRestLengths(restLengths)
+        model.springBoneBuffers = freshBuffers
 
-        // GPU needs WORLD directions for stiffness calculation
-        // boneBindDirections stores current→child in parent's LOCAL space
-        // Transform to world by applying the node's ACTUAL parent's rotation (not prev joint)
-        var initialWorldBindDirections: [SIMD3<Float>] = []
-        var boneIdx = 0
-        for spring in springBone.springs {
-            for joint in spring.joints {
-                // Every joint contributes exactly one entry so the count
-                // matches numBones — otherwise SpringBoneBuffers.updateBindDirections
-                // rejects the update and the GPU buffer stays uninitialised.
-                guard boneIdx < boneBindDirections.count else { break }
-                defer { boneIdx += 1 }
-
-                let localDir = boneBindDirections[boneIdx]
-                if let jointNode = model.nodes[safe: joint.node],
-                   let nodeParent = jointNode.parent {
-                    let parentRot = extractRotation(from: nodeParent.worldMatrix)
-                    let worldDir = simd_act(parentRot, localDir)
-                    initialWorldBindDirections.append(simd_normalize(worldDir))
-                } else {
-                    // Missing node or chain root: fall back to the bone's
-                    // own local direction (already a sensible non-zero unit
-                    // vector populated by the first pass).
-                    initialWorldBindDirections.append(localDir)
-                }
-            }
-        }
-        buffers.updateBindDirections(initialWorldBindDirections)
-
-        // Also initialize the interpolation targets with the same world directions
-        targetWorldBindDirections = initialWorldBindDirections
-        previousWorldBindDirections = initialWorldBindDirections
-
-        // Store CPU-side copies for physics reset
-        cpuRestLengths = restLengths
-        cpuParentIndices = parentIndices
-
-        // cpuRestLengths is immutable after setup, so the scale derived from
-        // it is constant for the model's lifetime — compute once here.
-        cachedModelScale = calculateModelScaleFromRestLengths()
-
-        if !sphereColliders.isEmpty {
-            buffers.updateSphereColliders(sphereColliders)
-        }
-
-        if !capsuleColliders.isEmpty {
-            buffers.updateCapsuleColliders(capsuleColliders)
-        }
-
-        if !planeColliders.isEmpty {
-            buffers.updatePlaneColliders(planeColliders)
-        }
-
-        // Initialize bone positions from bind pose (node world positions)
-        // Physics will naturally settle bones to their hanging position during settling period
-        var initialPositions: [SIMD3<Float>] = []
-        boneIndex = 0
-        for spring in springBone.springs {
-            for joint in spring.joints {
-                if let node = model.nodes[safe: joint.node] {
-                    initialPositions.append(node.worldPosition)
-                } else {
-                    initialPositions.append(.zero)
-                }
-                boneIndex += 1
-            }
-        }
-
-        // Copy initial positions to both prev and curr buffers
-        if let bonePosPrev = buffers.bonePosPrev,
-           let bonePosCurr = buffers.bonePosCurr,
-           !initialPositions.isEmpty {
-            let prevPtr = bonePosPrev.contents().bindMemory(to: SIMD3<Float>.self, capacity: initialPositions.count)
-            let currPtr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: initialPositions.count)
-            for i in 0..<initialPositions.count {
-                prevPtr[i] = initialPositions[i]
-                currPtr[i] = initialPositions[i]
-            }
-        }
-
-        #if VRM_METALKIT_ENABLE_DEBUG_PHYSICS
-        print("[SpringBone DEBUG] === Spring Bone Setup ===")
-        var debugBoneIndex = 0
-        for (springIndex, spring) in springBone.springs.enumerated() {
-            let springName = spring.name ?? ""
-            var debugMask: UInt32 = 0
-            if spring.colliderGroups.isEmpty {
-                debugMask = 0xFFFFFFFF
-            } else {
-                for groupIdx in spring.colliderGroups {
-                    if groupIdx < 32 { debugMask |= (1 << groupIdx) }
-                }
-            }
-            print("[SpringBone DEBUG] Chain \(springIndex): '\(springName)' joints=\(spring.joints.count) colliderGroups=\(spring.colliderGroups) mask=0x\(String(debugMask, radix: 16))")
-
-            for (jointIdx, joint) in spring.joints.enumerated() {
-                let pos = initialPositions[safe: debugBoneIndex] ?? .zero
-                let restLen = restLengths[safe: debugBoneIndex] ?? 0
-                let params = boneParams[safe: debugBoneIndex]
-                let parentIdx = parentIndices[safe: debugBoneIndex] ?? -1
-
-                if jointIdx < 3 || spring.joints.count <= 5 {
-                    let gravDir = params?.gravityDir ?? .zero
-                    let bindDir = boneBindDirections[safe: debugBoneIndex] ?? .zero
-                    print("  Joint \(jointIdx): node=\(joint.node) pos=(\(String(format: "%.3f", pos.x)), \(String(format: "%.3f", pos.y)), \(String(format: "%.3f", pos.z))) restLen=\(String(format: "%.4f", restLen)) parent=\(parentIdx) gravPow=\(params?.gravityPower ?? 0) gravDir=(\(String(format: "%.2f", gravDir.x)), \(String(format: "%.2f", gravDir.y)), \(String(format: "%.2f", gravDir.z))) bindDir=(\(String(format: "%.2f", bindDir.x)), \(String(format: "%.2f", bindDir.y)), \(String(format: "%.2f", bindDir.z))) stiff=\(params?.stiffness ?? 0)")
-                }
-                debugBoneIndex += 1
-            }
-        }
-        print("[SpringBone DEBUG] Total bones: \(initialPositions.count), settling frames: \(model.springBoneGlobalParams?.settlingFrames ?? 0)")
-
-        print("[SpringBone DEBUG] === Colliders ===")
-        print("[SpringBone DEBUG] Spheres: \(sphereColliders.count)")
-        for (i, sphere) in sphereColliders.enumerated() {
-            print("  Sphere \(i): center=(\(String(format: "%.3f", sphere.center.x)), \(String(format: "%.3f", sphere.center.y)), \(String(format: "%.3f", sphere.center.z))) radius=\(String(format: "%.3f", sphere.radius)) groupMask=0x\(String(sphere.groupMask, radix: 16))")
-        }
-        print("[SpringBone DEBUG] Capsules: \(capsuleColliders.count)")
-        for (i, capsule) in capsuleColliders.enumerated() {
-            print("  Capsule \(i): p0=(\(String(format: "%.3f", capsule.p0.x)), \(String(format: "%.3f", capsule.p0.y)), \(String(format: "%.3f", capsule.p0.z))) p1=(\(String(format: "%.3f", capsule.p1.x)), \(String(format: "%.3f", capsule.p1.y)), \(String(format: "%.3f", capsule.p1.z))) radius=\(String(format: "%.3f", capsule.radius)) groupMask=0x\(String(capsule.groupMask, radix: 16))")
-        }
-        print("[SpringBone DEBUG] Planes: \(planeColliders.count)")
-        #endif
-
-        // Initialize buffers for root bone kinematic updates
-        let numRootBones = rootBoneIndices.count
-        if numRootBones > 0 {
-            let singleStepLength = MemoryLayout<SIMD3<Float>>.stride * numRootBones
-            // Round up to nearest 256 bytes for Metal offset alignment requirements
-            let alignment = 256
-            let alignedStepLength = (singleStepLength + alignment - 1) & ~(alignment - 1)
-            
-            let maxSubsteps = VRMConstants.Physics.maxSubstepsPerFrame
-            let positionsLength = alignedStepLength * maxSubsteps
-            
-            animatedRootPositionsBuffer = device.makeBuffer(length: positionsLength,
-                                                           options: [.storageModeShared])
-            animatedRootPositionsBuffer?.label = "SpringBone AnimatedRootPositions"
-            // Mirror buffer holding the previous frame's animated positions —
-            // copied from animatedRootPositionsBuffer at frame boundaries (see
-            // update()). The kinematic kernel reads previousPos from here so
-            // velocity history isn't tied to bonePosCurr.
-            animatedRootPositionsPrevBuffer = device.makeBuffer(length: singleStepLength,
-                                                                options: [.storageModeShared])
-            animatedRootPositionsPrevBuffer?.label = "SpringBone AnimatedRootPositions Prev"
-            rootBoneIndicesBuffer = device.makeBuffer(bytes: rootBoneIndices,
-                                                     length: MemoryLayout<UInt32>.stride * numRootBones,
-                                                     options: [.storageModeShared])
-            rootBoneIndicesBuffer?.label = "SpringBone RootBoneIndices"
-            var numRootBonesUInt = UInt32(numRootBones)
-            numRootBonesBuffer = device.makeBuffer(bytes: &numRootBonesUInt,
-                                                  length: MemoryLayout<UInt32>.stride,
-                                                  options: [.storageModeShared])
-            numRootBonesBuffer?.label = "SpringBone NumRootBones"
-            
-            // Seed the initial root positions to prevent first-frame phantom inertia
-            var initialRootPositions: [SIMD3<Float>] = []
-            for rootIdx in rootBoneIndices {
-                if Int(rootIdx) < initialPositions.count {
-                    initialRootPositions.append(initialPositions[Int(rootIdx)])
-                }
-            }
-            if !initialRootPositions.isEmpty {
-                animatedRootPositionsBuffer?.contents().copyMemory(from: initialRootPositions, byteCount: singleStepLength)
-                animatedRootPositionsPrevBuffer?.contents().copyMemory(from: initialRootPositions, byteCount: singleStepLength)
-            }
-        }
-
-        // Build center-spring records so update() can apply center-frame deltas.
-        centerSpringRecords.removeAll(keepingCapacity: true)
-        previousCenterWorldMatrices.removeAll(keepingCapacity: true)
-        targetCenterWorldMatrices.removeAll(keepingCapacity: true)
-        var centerBoneIdx = 0
-        for spring in springBone.springs {
-            let count = spring.joints.count
-            if let centerIndex = spring.center {
-                centerSpringRecords.append(CenterSpringRecord(
-                    centerNodeIndex: centerIndex,
-                    boneStart: centerBoneIdx,
-                    boneCount: count
-                ))
-                if let centerNode = model.nodes[safe: centerIndex] {
-                    previousCenterWorldMatrices[centerIndex] = centerNode.worldMatrix
-                }
-            }
-            centerBoneIdx += count
-        }
-
-        // Allocate the GPU center-delta buffer sized for `maxSubsteps ×
-        // numCenterRecords` entries so the host can pre-fill all
-        // per-substep deltas at the top of `update()` and each substep's
-        // dispatch reads its slice at a fixed offset (VMK#295).
-        let numRecords = centerSpringRecords.count
-        if numRecords > 0 {
-            let maxSubsteps = VRMConstants.Physics.maxSubstepsPerFrame
-            let stride = MemoryLayout<CenterDeltaRecordGPU>.stride
-            let totalBytes = stride * numRecords * maxSubsteps
-            centerDeltaBuffer = device.makeBuffer(length: totalBytes,
-                                                   options: [.storageModeShared])
-            centerDeltaBuffer?.label = "SpringBone CenterDelta"
-            // makeBuffer(length:) does not zero recycled heap pages, and the
-            // apply kernel trusts each record's boneStart/boneCount. Any
-            // dispatch that precedes the per-frame fill must read
-            // boneCount == 0 (no-op) rather than garbage — a garbage
-            // boneCount walks bonePosCurr/Prev out of bounds.
-            if let buffer = centerDeltaBuffer {
-                memset(buffer.contents(), 0, totalBytes)
-            }
+        // Preserve existing global parameters (gravity, wind, settlingFrames) if present.
+        if var existingParams = model.springBoneGlobalParams {
+            existingParams.numBones = UInt32(newLayout.totalBones)
+            existingParams.numSpheres = UInt32(counts.spheres)
+            existingParams.numCapsules = UInt32(counts.capsules)
+            existingParams.numPlanes = UInt32(totalPlaneCount)
+            model.springBoneGlobalParams = existingParams
         } else {
-            centerDeltaBuffer = nil
+            model.springBoneGlobalParams = SpringBoneGlobalParams(
+                gravity: VRMConstants.Physics.defaultGravity,
+                dtSub: 1.0 / 120.0,
+                windAmplitude: 0.0,
+                windFrequency: 1.0,
+                windPhase: 0.0,
+                windDirection: SIMD3<Float>(1, 0, 0),
+                substeps: 2,
+                numBones: UInt32(newLayout.totalBones),
+                numSpheres: UInt32(counts.spheres),
+                numCapsules: UInt32(counts.capsules),
+                numPlanes: UInt32(totalPlaneCount),
+                settlingFrames: 0
+            )
         }
 
+        // 4. Populate composed layout, preserving surviving chains & selectively warming new ones.
+        try populateSpringBoneData(
+            model: model,
+            layout: newLayout,
+            preserving: snapshot,
+            warmupNewChainSteps: warmupNewChainSteps
+        )
+    }
+
+    private func captureDynamicRebuildSnapshot(model: VRMModel) -> DynamicRebuildSnapshot {
+        var chainsByKey: [[ObjectIdentifier]: PreservedChainState] = [:]
+
+        if let oldLayout = committedLayout,
+           let oldBuffers = model.springBoneBuffers,
+           oldBuffers.numBones == oldLayout.totalBones,
+           oldLayout.totalBones > 0 {
+            // Prefer the last completed snapshot (safe while a shared command buffer may still be in flight).
+            var liveCurr: [SIMD3<Float>] = []
+            var livePrev: [SIMD3<Float>] = []
+            snapshotLock.lock()
+            if latestCompletedFrame > 0,
+               latestPositionsSnapshot.count == oldLayout.totalBones,
+               latestPrevPositionsSnapshot.count == oldLayout.totalBones {
+                liveCurr = latestPositionsSnapshot
+                livePrev = latestPrevPositionsSnapshot
+            }
+            snapshotLock.unlock()
+
+            if liveCurr.isEmpty,
+               let currBuf = oldBuffers.bonePosCurr,
+               let prevBuf = oldBuffers.bonePosPrev {
+                let currPtr = currBuf.contents().bindMemory(to: SIMD3<Float>.self, capacity: oldLayout.totalBones)
+                let prevPtr = prevBuf.contents().bindMemory(to: SIMD3<Float>.self, capacity: oldLayout.totalBones)
+                liveCurr = Array(UnsafeBufferPointer(start: currPtr, count: oldLayout.totalBones))
+                livePrev = Array(UnsafeBufferPointer(start: prevPtr, count: oldLayout.totalBones))
+            }
+
+            if liveCurr.count == oldLayout.totalBones && livePrev.count == oldLayout.totalBones {
+                for (chainIdx, chain) in oldLayout.chains.enumerated() where chainIdx < chainRanges.count {
+                    let range = chainRanges[chainIdx]
+                    guard range.upperBound <= liveCurr.count else { continue }
+                    let currSlice = Array(liveCurr[range])
+                    let prevSlice = Array(livePrev[range])
+                    let asleep = chainIdx < sleepGate.asleep.count ? sleepGate.asleep[chainIdx] : false
+                    let counter = chainIdx < sleepGate.counters.count ? sleepGate.counters[chainIdx] : 0
+                    let prevRoot = chainIdx < previousRootPositions.count ? previousRootPositions[chainIdx] : nil
+                    let lastRoot = chainIdx < lastRootPositions.count ? lastRootPositions[chainIdx] : nil
+                    let prevBindSlice: [SIMD3<Float>]
+                    if range.upperBound <= previousWorldBindDirections.count {
+                        prevBindSlice = Array(previousWorldBindDirections[range])
+                    } else {
+                        prevBindSlice = []
+                    }
+                    chainsByKey[chain.chainKey] = PreservedChainState(
+                        currPositions: currSlice,
+                        prevPositions: prevSlice,
+                        isAsleep: asleep,
+                        sleepCounter: counter,
+                        previousRootPos: prevRoot,
+                        lastRootPos: lastRoot,
+                        previousBindDirs: prevBindSlice
+                    )
+                }
+            }
+        }
+
+        return DynamicRebuildSnapshot(
+            chainsByKey: chainsByKey,
+            previousCenterWorldMatrices: previousCenterWorldMatrices,
+            pendingForeignSnapshot: pendingForeignSnapshot,
+            pendingExternalColliders: pendingExternalColliders,
+            previousForeignForSleep: previousForeignForSleep,
+            previousExternalForSleep: previousExternalForSleep
+        )
+    }
+
+    func populateSpringBoneData(model: VRMModel) throws {
+        guard model.hasAnySpringBoneLocked(),
+              model.springBoneBuffers != nil,
+              model.device != nil else {
+            return
+        }
+        let layout = try ComposedSpringBoneLayout.build(model: model)
+        try populateSpringBoneData(model: model, layout: layout, preserving: nil, warmupNewChainSteps: 0)
+    }
+
+    private func populateSpringBoneData(
+        model: VRMModel,
+        layout: ComposedSpringBoneLayout,
+        preserving snapshot: DynamicRebuildSnapshot?,
+        warmupNewChainSteps: Int
+    ) throws {
+        guard let buffers = model.springBoneBuffers else { return }
+
+        // Advance layout generation immediately under snapshotLock so any in-flight
+        // async GPU completion handler from a previous layout is cleanly discarded.
         snapshotLock.lock()
+        physicsLayoutGeneration &+= 1
         latestPositionsSnapshot.removeAll(keepingCapacity: true)
         latestPrevPositionsSnapshot.removeAll(keepingCapacity: true)
         completedChainVelocities.removeAll(keepingCapacity: true)
@@ -2211,18 +1989,516 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         lastAppliedFrame = 0
         snapshotLock.unlock()
 
-        // Pre-resolve flat per-frame capture caches and static bone initial axes
-        rebuildTargetCaptureCaches(model: model, springBone: springBone)
+        activeLayout = layout
+        committedLayout = layout
+
+        var boneParams: [BoneParams] = []
+        var restLengths: [Float] = []
+        var parentIndices: [Int] = []
+        var sphereColliders: [SphereCollider] = []
+        var capsuleColliders: [CapsuleCollider] = []
+        var planeColliders: [PlaneCollider] = []
+        boneBindDirections = []
+
+        if let snapshot {
+            pendingForeignSnapshot = snapshot.pendingForeignSnapshot
+            pendingExternalColliders = snapshot.pendingExternalColliders
+            previousForeignForSleep = snapshot.previousForeignForSleep
+            previousExternalForSleep = snapshot.previousExternalForSleep
+        } else {
+            pendingForeignSnapshot = ForeignColliderSnapshot()
+            pendingExternalColliders = ForeignColliderSnapshot()
+            previousForeignForSleep = ForeignColliderSnapshot()
+            previousExternalForSleep = ForeignColliderSnapshot()
+        }
+        activeForeignSpheres = 0
+        activeForeignCapsules = 0
+
+        let syntheticGroupBit = layout.syntheticGroupBit
+        sweptColliderGroupMask = syntheticGroupBit
+        foreignColliderGroupIndex = layout.foreignColliderGroupIndex
+
+        var boneIndex = 0
+        rootBoneIndices = []
+        chainColliderMasks = []
+
+        for chain in layout.chains {
+            guard !chain.jointNodes.isEmpty else { continue }
+            chainColliderMasks.append(chain.colliderGroupMask)
+
+            for jointIndexInChain in 0..<chain.jointNodes.count {
+                let currentNode = chain.jointNodes[jointIndexInChain]
+                let joint = chain.jointSettings[jointIndexInChain]
+                let isRootBone = (jointIndexInChain == 0)
+
+                if isRootBone {
+                    rootBoneIndices.append(UInt32(boneIndex))
+                }
+
+                let normalizedGravityDir = simd_length(joint.gravityDir) > 0.001
+                    ? simd_normalize(joint.gravityDir)
+                    : SIMD3<Float>(0, -1, 0)
+
+                let parentIdx = isRootBone ? -1 : (boneIndex - 1)
+                parentIndices.append(parentIdx)
+
+                let clamped = springBoneOverride.apply(
+                    stiffness: joint.stiffness,
+                    dragForce: joint.dragForce,
+                    gravityPower: joint.gravityPower,
+                    jointName: currentNode?.name
+                )
+
+                boneParams.append(BoneParams(
+                    stiffness: clamped.stiffness,
+                    drag: clamped.dragForce,
+                    radius: joint.hitRadius,
+                    parentIndex: parentIdx < 0 ? 0xFFFFFFFF : UInt32(parentIdx),
+                    gravityPower: clamped.gravityPower,
+                    colliderGroupMask: chain.colliderGroupMask,
+                    gravityDir: normalizedGravityDir,
+                    angleLimit: joint.angleLimit
+                ))
+
+                // Derive immutable bind-pose rest length (never live animated distance).
+                if jointIndexInChain > 0,
+                   let currentNode,
+                   let parentNode = chain.jointNodes[jointIndexInChain - 1] {
+                    restLengths.append(Self.computeBindRestLength(parent: parentNode, child: currentNode))
+                } else {
+                    restLengths.append(0.0)
+                }
+
+                // Derive immutable bind-pose local direction (current -> next in parent's bind frame).
+                if let currentNode {
+                    if jointIndexInChain + 1 < chain.jointNodes.count,
+                       let nextNode = chain.jointNodes[jointIndexInChain + 1] {
+                        boneBindDirections.append(computeBindLocalDirection(current: currentNode, next: nextNode))
+                    } else {
+                        boneBindDirections.append(SIMD3<Float>(0, -1, 0))
+                    }
+                } else if jointIndexInChain > 0,
+                          jointIndexInChain + 1 < chain.jointNodes.count,
+                          let prevNode = chain.jointNodes[jointIndexInChain - 1],
+                          let nextNode = chain.jointNodes[jointIndexInChain + 1] {
+                    let delta = nextNode.worldPosition - prevNode.worldPosition
+                    boneBindDirections.append(simd_length(delta) > 1e-4 ? simd_normalize(delta) : SIMD3<Float>(0, 1, 0))
+                } else {
+                    boneBindDirections.append(SIMD3<Float>(0, 1, 0))
+                }
+
+                boneIndex += 1
+            }
+        }
+
+        chainRanges = computeChainRanges(numBones: boneIndex)
+        sleepGate = SpringBoneSleepGate(chainCount: chainRanges.count)
+        allocateSleepBuffers(numBones: boneIndex, chainCount: chainRanges.count)
+
+        // Build world-space colliders (authored host + attachment, then cached host synthetic).
+        func appendCollider(_ collider: ComposedCollider) {
+            let wm = collider.node.worldMatrix
+            let worldRotation = simd_float3x3(
+                SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
+                SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
+                SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2])
+            )
+            let worldPos = collider.node.worldPosition
+
+            switch collider.shape {
+            case .sphere(let offset, let radius):
+                sphereColliders.append(SphereCollider(
+                    center: worldPos + worldRotation * offset,
+                    radius: radius,
+                    groupMask: collider.groupMask
+                ))
+            case .insideSphere(let offset, let radius):
+                sphereColliders.append(SphereCollider(
+                    center: worldPos + worldRotation * offset,
+                    radius: radius,
+                    groupMask: collider.groupMask,
+                    inside: true
+                ))
+            case .capsule(let offset, let radius, let tail):
+                capsuleColliders.append(CapsuleCollider(
+                    p0: worldPos + worldRotation * offset,
+                    p1: worldPos + worldRotation * tail,
+                    radius: radius,
+                    groupMask: collider.groupMask
+                ))
+            case .insideCapsule(let offset, let radius, let tail):
+                capsuleColliders.append(CapsuleCollider(
+                    p0: worldPos + worldRotation * offset,
+                    p1: worldPos + worldRotation * tail,
+                    radius: radius,
+                    groupMask: collider.groupMask,
+                    inside: true
+                ))
+            case .plane(let offset, let normal):
+                let worldNormal = worldRotation * normal
+                let normalizedNormal = simd_length(worldNormal) > 0.001 ? simd_normalize(worldNormal) : SIMD3<Float>(0, 1, 0)
+                planeColliders.append(PlaneCollider(
+                    point: worldPos + worldRotation * offset,
+                    normal: normalizedNormal,
+                    groupMask: collider.groupMask
+                ))
+            }
+        }
+
+        for collider in layout.authoredColliders {
+            appendCollider(collider)
+        }
+        for collider in layout.syntheticColliders {
+            appendCollider(collider)
+        }
+
+        buffers.updateBoneParameters(boneParams)
+
+        // Skirt ring chord detection runs on host chains when base springBone exists;
+        // pad aux entries with defaults for any attached cosmetic chains.
+        let hostChainCount = layout.chains.prefix(while: { $0.sourceIsHost }).count
+        let hostSyntheticEnabled = (0..<hostChainCount).map { (chainColliderMasks[$0] & syntheticGroupBit) != 0 }
+        let ringDetection = SpringBoneSkirtRingDetector.buildCollisionAux(
+            model: model,
+            hasSyntheticColliders: layout.syntheticGroupBit != 0,
+            chainSyntheticEnabled: hostSyntheticEnabled
+        )
+        var combinedAux = ringDetection.aux
+        if combinedAux.count < boneIndex {
+            combinedAux.append(contentsOf: repeatElement(SpringBoneCollisionAux(), count: boneIndex - combinedAux.count))
+        } else if combinedAux.count > boneIndex {
+            combinedAux = Array(combinedAux.prefix(boneIndex))
+        }
+        let auxUploaded = buffers.updateCollisionAux(combinedAux)
+        hasRingNeighbors = auxUploaded && ringDetection.hasRingNeighbors
+        ringChainComponents = hasRingNeighbors ? ringDetection.ringChainComponents : []
+
+        buffers.updateRestLengths(restLengths)
+
+        // Compute current world-space bind directions for stiffness.
+        var initialWorldBindDirections: [SIMD3<Float>] = []
+        initialWorldBindDirections.reserveCapacity(boneIndex)
+        var bIdx = 0
+        for chain in layout.chains {
+            for jointNode in chain.jointNodes {
+                guard bIdx < boneBindDirections.count else { break }
+                defer { bIdx += 1 }
+                let localDir = boneBindDirections[bIdx]
+                if let jointNode, let nodeParent = jointNode.parent {
+                    let parentRot = simd_normalize(extractRotation(from: nodeParent.worldMatrix))
+                    let worldDir = simd_act(parentRot, localDir)
+                    initialWorldBindDirections.append(simd_length(worldDir) > 1e-4 ? simd_normalize(worldDir) : localDir)
+                } else {
+                    initialWorldBindDirections.append(localDir)
+                }
+            }
+        }
+        buffers.updateBindDirections(initialWorldBindDirections)
+
+        targetWorldBindDirections = initialWorldBindDirections
+        previousWorldBindDirections = initialWorldBindDirections
+        cpuRestLengths = restLengths
+        cpuParentIndices = parentIndices
+        cachedModelScale = calculateModelScaleFromRestLengths()
+
+        if !sphereColliders.isEmpty {
+            buffers.updateSphereColliders(sphereColliders)
+        }
+        if !capsuleColliders.isEmpty {
+            buffers.updateCapsuleColliders(capsuleColliders)
+        }
+        if !planeColliders.isEmpty {
+            buffers.updatePlaneColliders(planeColliders)
+        } else if !model.runtimeFloorPlanes.isEmpty {
+            buffers.setPlaneColliders(model.runtimeFloorPlanes)
+            model.springBoneGlobalParams?.numPlanes = UInt32(model.runtimeFloorPlanes.count)
+        }
+
+        // Seed bone positions: preserve live curr/prev for surviving chains, seed kinematic
+        // bind pose for new chains (zero velocity).
+        var currPositions = [SIMD3<Float>](repeating: .zero, count: boneIndex)
+        var prevPositions = [SIMD3<Float>](repeating: .zero, count: boneIndex)
+        var restoredAsleep = [Bool](repeating: false, count: chainRanges.count)
+        var restoredCounters = [Int](repeating: 0, count: chainRanges.count)
+        var newChainIndices: [Int] = []
+        var preservedLastRoots = [SIMD3<Float>](repeating: .zero, count: rootBoneIndices.count)
+        var preservedPrevRoots = [SIMD3<Float>](repeating: .zero, count: rootBoneIndices.count)
+
+        for (chainIdx, chain) in layout.chains.enumerated() where chainIdx < chainRanges.count {
+            let range = chainRanges[chainIdx]
+            let rootPos = chain.jointNodes[0]?.worldPosition ?? .zero
+
+            if let saved = snapshot?.chainsByKey[chain.chainKey],
+               !chain.chainKey.isEmpty,
+               saved.currPositions.count == range.count,
+               saved.prevPositions.count == range.count {
+                // Surviving chain: restore exact live positions, momentum, sleep & interpolation history.
+                for offset in 0..<range.count {
+                    currPositions[range.lowerBound + offset] = saved.currPositions[offset]
+                    prevPositions[range.lowerBound + offset] = saved.prevPositions[offset]
+                }
+                restoredAsleep[chainIdx] = saved.isAsleep
+                restoredCounters[chainIdx] = saved.sleepCounter
+                preservedLastRoots[chainIdx] = saved.lastRootPos ?? rootPos
+                preservedPrevRoots[chainIdx] = saved.previousRootPos ?? rootPos
+                if saved.previousBindDirs.count == range.count {
+                    for offset in 0..<range.count {
+                        previousWorldBindDirections[range.lowerBound + offset] = saved.previousBindDirs[offset]
+                    }
+                }
+            } else {
+                // New chain (or fresh load): seed along current pose with zero velocity.
+                if snapshot != nil {
+                    newChainIndices.append(chainIdx)
+                    // Kinematic seed along world bind directions from current animated root.
+                    currPositions[range.lowerBound] = rootPos
+                    prevPositions[range.lowerBound] = rootPos
+                    for offset in 1..<range.count {
+                        let globalBone = range.lowerBound + offset
+                        let parentBone = globalBone - 1
+                        let dir = parentBone < initialWorldBindDirections.count
+                            ? initialWorldBindDirections[parentBone]
+                            : SIMD3<Float>(0, -1, 0)
+                        let pos = currPositions[parentBone] + dir * restLengths[globalBone]
+                        currPositions[globalBone] = pos
+                        prevPositions[globalBone] = pos
+                    }
+                } else {
+                    for offset in 0..<range.count {
+                        let pos = chain.jointNodes[offset]?.worldPosition ?? .zero
+                        currPositions[range.lowerBound + offset] = pos
+                        prevPositions[range.lowerBound + offset] = pos
+                    }
+                }
+                preservedLastRoots[chainIdx] = rootPos
+                preservedPrevRoots[chainIdx] = rootPos
+            }
+        }
+
+        if let bonePosPrev = buffers.bonePosPrev,
+           let bonePosCurr = buffers.bonePosCurr,
+           boneIndex > 0 {
+            let prevPtr = bonePosPrev.contents().bindMemory(to: SIMD3<Float>.self, capacity: boneIndex)
+            let currPtr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: boneIndex)
+            for i in 0..<boneIndex {
+                prevPtr[i] = prevPositions[i]
+                currPtr[i] = currPositions[i]
+            }
+        }
+
+        // Restore surviving chains' sleep state.
+        sleepGate.restoreState(asleep: restoredAsleep, counters: restoredCounters, ranges: chainRanges)
+        uploadChainSleepFlags()
+
+        // Initialize kinematic root buffers.
+        let numRootBones = rootBoneIndices.count
+        if numRootBones > 0 {
+            let singleStepLength = MemoryLayout<SIMD3<Float>>.stride * numRootBones
+            let alignment = 256
+            let alignedStep = (singleStepLength + alignment - 1) & ~(alignment - 1)
+            let maxSubsteps = VRMConstants.Physics.maxSubstepsPerFrame
+            let positionsLength = alignedStep * maxSubsteps
+
+            animatedRootPositionsBuffer = device.makeBuffer(length: positionsLength, options: [.storageModeShared])
+            animatedRootPositionsBuffer?.label = "SpringBone AnimatedRootPositions"
+            animatedRootPositionsPrevBuffer = device.makeBuffer(length: singleStepLength, options: [.storageModeShared])
+            animatedRootPositionsPrevBuffer?.label = "SpringBone AnimatedRootPositions Prev"
+            rootBoneIndicesBuffer = device.makeBuffer(
+                bytes: rootBoneIndices,
+                length: MemoryLayout<UInt32>.stride * numRootBones,
+                options: [.storageModeShared]
+            )
+            rootBoneIndicesBuffer?.label = "SpringBone RootBoneIndices"
+            var numRootBonesUInt = UInt32(numRootBones)
+            numRootBonesBuffer = device.makeBuffer(
+                bytes: &numRootBonesUInt,
+                length: MemoryLayout<UInt32>.stride,
+                options: [.storageModeShared]
+            )
+            numRootBonesBuffer?.label = "SpringBone NumRootBones"
+
+            let currentRootPositions = layout.chains.compactMap { $0.jointNodes.first.flatMap { $0 }?.worldPosition }
+            if !currentRootPositions.isEmpty, currentRootPositions.count == numRootBones,
+               let currBuf = animatedRootPositionsBuffer, let prevBuf = animatedRootPositionsPrevBuffer {
+                for slot in 0..<maxSubsteps {
+                    currBuf.contents().advanced(by: slot * alignedStep)
+                        .copyMemory(from: currentRootPositions, byteCount: singleStepLength)
+                }
+                prevBuf.contents().copyMemory(from: preservedPrevRoots, byteCount: singleStepLength)
+            }
+            if snapshot != nil {
+                lastRootPositions = preservedLastRoots
+                previousRootPositions = preservedPrevRoots
+                targetRootPositions = currentRootPositions
+            } else {
+                lastRootPositions = []
+                previousRootPositions = []
+                targetRootPositions = []
+            }
+        }
+
+        // Build center-spring records keyed by ObjectIdentifier(centerNode), preserving
+        // surviving center history from snapshot.
+        centerSpringRecords.removeAll(keepingCapacity: true)
+        previousCenterWorldMatrices.removeAll(keepingCapacity: true)
+        targetCenterWorldMatrices.removeAll(keepingCapacity: true)
+        var centerBoneIdx = 0
+        for chain in layout.chains {
+            let count = chain.jointNodes.count
+            if let centerIndex = chain.centerNodeIndex {
+                let centerNode = chain.centerNode
+                let centerID = centerNode.map(ObjectIdentifier.init)
+                centerSpringRecords.append(CenterSpringRecord(
+                    centerNodeIndex: centerIndex,
+                    centerNode: centerNode,
+                    centerNodeID: centerID,
+                    boneStart: centerBoneIdx,
+                    boneCount: count
+                ))
+                if let centerNode, let centerID {
+                    if let savedMatrix = snapshot?.previousCenterWorldMatrices[centerID] {
+                        previousCenterWorldMatrices[centerID] = savedMatrix
+                    } else {
+                        previousCenterWorldMatrices[centerID] = centerNode.worldMatrix
+                    }
+                }
+            }
+            centerBoneIdx += count
+        }
+
+        let numRecords = centerSpringRecords.count
+        if numRecords > 0 {
+            let maxSubsteps = VRMConstants.Physics.maxSubstepsPerFrame
+            let stride = MemoryLayout<CenterDeltaRecordGPU>.stride
+            let totalBytes = stride * numRecords * maxSubsteps
+            centerDeltaBuffer = device.makeBuffer(length: totalBytes, options: [.storageModeShared])
+            centerDeltaBuffer?.label = "SpringBone CenterDelta"
+            if let buffer = centerDeltaBuffer {
+                memset(buffer.contents(), 0, totalBytes)
+            }
+        } else {
+            centerDeltaBuffer = nil
+        }
+
+        // Pre-resolve flat per-frame capture caches from the composed layout.
+        rebuildTargetCaptureCaches(model: model, layout: layout)
+
+        // Selective GPU warmup ONLY on newly attached chains via chainSleepBuffer
+        // (zero SpringBone shader changes; surviving chains stay frozen = 1).
+        if snapshot != nil,
+           warmupNewChainSteps > 0,
+           !newChainIndices.isEmpty,
+           let globalParams = model.springBoneGlobalParams,
+           let sleepBuf = chainSleepBuffer {
+            let newChainSet = Set(newChainIndices)
+            let sleepPtr = sleepBuf.contents().bindMemory(to: UInt32.self, capacity: chainRanges.count)
+            for c in 0..<chainRanges.count {
+                sleepPtr[c] = newChainSet.contains(c) ? 0 : 1
+            }
+
+            // Prepare substep-0 poses, colliders, foreign tail, and identity center deltas.
+            let (clampedForeign, clampedExternal): (ForeignColliderSnapshot, ForeignColliderSnapshot)
+            if foreignColliderGroupIndex != 0xFFFFFFFF {
+                (clampedForeign, clampedExternal) = clampedForeignSets(buffers: buffers)
+            } else {
+                clampedForeign = ForeignColliderSnapshot()
+                clampedExternal = ForeignColliderSnapshot()
+            }
+            writeForeignTail(buffers: buffers, foreign: clampedForeign, external: clampedExternal)
+
+            populateTargetColliderTransforms()
+            if !targetSphereColliders.isEmpty { buffers.updateSphereColliders(targetSphereColliders) }
+            if !targetCapsuleColliders.isEmpty { buffers.updateCapsuleColliders(targetCapsuleColliders) }
+            if !targetPlaneColliders.isEmpty { buffers.updatePlaneColliders(targetPlaneColliders) }
+
+            if !centerSpringRecords.isEmpty {
+                let savedPrevCenters = previousCenterWorldMatrices
+                captureTargetCenterWorldMatrices(model: model)
+                for record in centerSpringRecords {
+                    if let centerID = record.centerNodeID,
+                       let target = targetCenterWorldMatrices[centerID] {
+                        previousCenterWorldMatrices[centerID] = target
+                    }
+                }
+                fillCenterDeltaBufferForFrame(substepCount: 1)
+                previousCenterWorldMatrices = savedPrevCenters
+            }
+
+            var warmupParams = globalParams
+            warmupParams.settlingFrames = 0
+            warmupParams.numSpheres = UInt32(buffers.numSpheres + activeForeignSpheres)
+            warmupParams.numCapsules = UInt32(buffers.numCapsules + activeForeignCapsules)
+            globalParamsBuffer?.contents().copyMemory(
+                from: &warmupParams,
+                byteCount: MemoryLayout<SpringBoneGlobalParams>.stride
+            )
+
+            if let warmupCB = commandQueue.makeCommandBuffer() {
+                warmupCB.label = "SpringBone Selective New-Chain Warmup"
+                for _ in 0..<warmupNewChainSteps {
+                    executeXPBDStep(
+                        buffers: buffers,
+                        globalParams: warmupParams,
+                        sharedCommandBuffer: warmupCB,
+                        substepIndex: 0,
+                        registerCompletedHandler: false
+                    )
+                }
+                warmupCB.commit()
+                warmupCB.waitUntilCompleted()
+            }
+
+            // Zero velocity ONLY on newly attached chains; surviving chains are untouched.
+            if let bonePosCurr = buffers.bonePosCurr,
+               let bonePosPrev = buffers.bonePosPrev {
+                let currPtr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: boneIndex)
+                let prevPtr = bonePosPrev.contents().bindMemory(to: SIMD3<Float>.self, capacity: boneIndex)
+                for c in newChainIndices where c < chainRanges.count {
+                    for b in chainRanges[c] {
+                        prevPtr[b] = currPtr[b]
+                    }
+                }
+            }
+
+            // Restore surviving chains' exact sleepGate flags into chainSleepBuffer.
+            sleepGate.restoreState(asleep: restoredAsleep, counters: restoredCounters, ranges: chainRanges)
+            uploadChainSleepFlags()
+            _ = globalParams
+        }
+
+        // Seed snapshot for dynamic rebuilds so sleeping/surviving chains continue smoothly on the very next frame.
+        if snapshot != nil,
+           let bonePosCurr = buffers.bonePosCurr,
+           let bonePosPrev = buffers.bonePosPrev,
+           boneIndex > 0 {
+            let currPtr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: boneIndex)
+            let prevPtr = bonePosPrev.contents().bindMemory(to: SIMD3<Float>.self, capacity: boneIndex)
+            let snapCurr = Array(UnsafeBufferPointer(start: currPtr, count: boneIndex))
+            let snapPrev = Array(UnsafeBufferPointer(start: prevPtr, count: boneIndex))
+            let invDt = quality.substepRateHz > 0 ? Float(quality.substepRateHz) : 1
+            snapshotLock.lock()
+            latestPositionsSnapshot = snapCurr
+            latestPrevPositionsSnapshot = snapPrev
+            SpringBoneSleepGate.fillChainMaxVelocities(
+                into: &completedChainVelocities,
+                curr: snapCurr,
+                prev: snapPrev,
+                ranges: chainRanges,
+                invDt: invDt
+            )
+            latestCompletedFrame = 1
+            lastAppliedFrame = 0
+            snapshotLock.unlock()
+        }
     }
 
     private func updateAnimatedPositions(model: VRMModel, buffers: SpringBoneBuffers, substepIndex: Int = 0) {
-        guard let springBone = model.springBone,
-              !rootBoneIndices.isEmpty,
+        guard !rootBoneIndices.isEmpty,
               let animatedRootPositionsBuffer = animatedRootPositionsBuffer else {
             return
         }
 
-        ensureTargetCaptureCaches(model: model, springBone: springBone)
+        ensureTargetCaptureCaches(model: model)
 
         // Update root bone positions from pre-resolved flat cache (zero per-call allocation).
         targetRootPositions.removeAll(keepingCapacity: true)
@@ -2314,7 +2590,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     private func captureCompletedPositions(bonePosCurr: MTLBuffer?,
                                            bonePosPrev: MTLBuffer? = nil,
                                            numBones: Int,
-                                           frameID: UInt64) {
+                                           frameID: UInt64,
+                                           generation: UInt64,
+                                           chainRangesSnapshot: [Range<Int>]) {
         guard let bonePosCurr = bonePosCurr, numBones > 0 else {
             return
         }
@@ -2322,6 +2600,12 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         let sourcePointer = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: numBones)
 
         snapshotLock.lock()
+        // Discard stale GPU completions from an earlier layout generation.
+        guard generation == physicsLayoutGeneration else {
+            snapshotLock.unlock()
+            return
+        }
+
         if latestPositionsSnapshot.count != numBones {
             latestPositionsSnapshot = Array(repeating: SIMD3<Float>(repeating: 0), count: numBones)
         }
@@ -2345,7 +2629,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 into: &completedChainVelocities,
                 curr: latestPositionsSnapshot,
                 prev: latestPrevPositionsSnapshot,
-                ranges: chainRanges,
+                ranges: chainRangesSnapshot,
                 invDt: invDt
             )
         }
@@ -2372,7 +2656,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
     /// Read back GPU-computed bone positions and update VRMNode transforms
     func writeBonesToNodes(model: VRMModel) {
-        guard let springBone = model.springBone,
+        guard let layout = activeLayout,
               let buffers = model.springBoneBuffers else {
             vrmLog("[SpringBone] writeBonesToNodes: Missing required data")
             return
@@ -2419,40 +2703,27 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         performanceTracker?.beginPhase(.springReadback)
         defer { performanceTracker?.endPhase(.springReadback) }
 
-        // Map bone index to spring/joint for node updates. Reuse a single
-        // nodePositions buffer across all springs instead of allocating per
-        // spring per frame; springs typically hold 5-30 joints.
         var globalBoneIndex = 0
         chainNodePositions.reserveCapacity(32)
-        // `chainIndex` must track NON-EMPTY springs only, matching how
-        // `sleepGate`/`chainColliderMasks` are indexed in populateSpringBoneData
-        // — a zero-joint spring earlier in `springs` must not shift this.
-        var chainIndex = 0
-        for spring in springBone.springs {
-            guard !spring.joints.isEmpty else { continue }
+        for (chainIndex, chain) in layout.chains.enumerated() {
+            guard !chain.jointNodes.isEmpty else { continue }
             guard globalBoneIndex < positions.count else { break }
-            defer { chainIndex += 1 }
 
             // Skip the CPU writeback for chains that are fully asleep; their
             // node transforms are unchanged from the previous frame.
             if chainIndex < sleepGate.asleep.count && sleepGate.asleep[chainIndex] {
-                globalBoneIndex += spring.joints.count
+                globalBoneIndex += chain.jointNodes.count
                 continue
             }
 
             chainNodePositions.removeAll(keepingCapacity: true)
-            for joint in spring.joints {
-                // Every joint occupies one slot in the GPU positions array,
-                // including joints whose node is missing. Advance the global
-                // index unconditionally so downstream joints stay aligned with
-                // their physics outputs.
+            for node in chain.jointNodes {
                 guard globalBoneIndex < positions.count else { break }
                 defer { globalBoneIndex += 1 }
-                guard let node = model.nodes[safe: joint.node] else { continue }
+                guard let node else { continue }
                 chainNodePositions.append((node, positions[globalBoneIndex], globalBoneIndex))
             }
 
-            // Update node transforms based on GPU-computed positions
             if chainNodePositions.count >= 2 {
                 updateNodeTransformsForChain(nodePositions: chainNodePositions)
             }
@@ -2698,7 +2969,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     // MARK: - Frame Interpolation State Capture
 
     /// Ensures the pre-resolved flat caches match `model`'s current revisions.
-    private func ensureTargetCaptureCaches(model: VRMModel, springBone: VRMSpringBone) {
+    private func ensureTargetCaptureCaches(model: VRMModel) {
         let modelID = ObjectIdentifier(model)
         let parentRev = VRMNode.parentHierarchyRevision.load(ordering: .relaxed)
         if cachedCacheModelID == modelID &&
@@ -2706,38 +2977,58 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
            cachedParentHierarchyRevision == parentRev {
             return
         }
-        rebuildTargetCaptureCaches(model: model, springBone: springBone, parentRev: parentRev)
+        // Re-compose layout whenever springBoneRevision or model changed so in-place
+        // collider shape/node mutations (e.g. collider reattachment or offset edits)
+        // propagate into the flat collider tables immediately — ONLY if the rebuilt
+        // layout matches the currently allocated GPU buffers. Structural add/remove
+        // changes defer to rebuildSpringBoneData so activeLayout never desyncs.
+        if cachedCacheModelID != modelID || cachedSpringBoneRevision != model.springBoneRevision || activeLayout == nil {
+            if let buffers = model.springBoneBuffers,
+               let rebuilt = try? ComposedSpringBoneLayout.build(model: model),
+               rebuilt.totalBones == buffers.numBones,
+               rebuilt.chains.count == chainRanges.count {
+                let counts = rebuilt.colliderCounts()
+                if counts.spheres == buffers.numSpheres && counts.capsules == buffers.numCapsules {
+                    activeLayout = rebuilt
+                }
+            }
+        }
+        if let layout = activeLayout {
+            rebuildTargetCaptureCaches(model: model, layout: layout, parentRev: parentRev)
+        }
     }
 
-    private func rebuildTargetCaptureCaches(model: VRMModel, springBone: VRMSpringBone, parentRev: UInt64? = nil) {
+    private func rebuildTargetCaptureCaches(
+        model: VRMModel,
+        layout: ComposedSpringBoneLayout,
+        parentRev: UInt64? = nil
+    ) {
         cachedCacheModelID = ObjectIdentifier(model)
         cachedSpringBoneRevision = model.springBoneRevision
         cachedParentHierarchyRevision = parentRev ?? VRMNode.parentHierarchyRevision.load(ordering: .relaxed)
 
         // 1. Flat root nodes
         cachedRootNodes.removeAll(keepingCapacity: true)
-        cachedRootNodes.reserveCapacity(springBone.springs.count)
-        for spring in springBone.springs {
-            if let firstJoint = spring.joints.first,
-               let node = model.nodes[safe: firstJoint.node] {
-                cachedRootNodes.append(node)
+        cachedRootNodes.reserveCapacity(layout.chains.count)
+        for chain in layout.chains {
+            if let first = chain.jointNodes.first, let rootNode = first {
+                cachedRootNodes.append(rootNode)
             }
         }
 
         // 2. Flat bind-direction entries & precomputed static bone initial axes
-        //    (guarded by live `initialRotation` equality check and live `jointNode.parent` read)
         cachedBindDirEntries.removeAll(keepingCapacity: true)
         cachedBindDirEntries.reserveCapacity(boneBindDirections.count)
         boneInitialAxes.removeAll(keepingCapacity: true)
         boneInitialAxes.reserveCapacity(boneBindDirections.count)
 
         var boneIndex = 0
-        for spring in springBone.springs {
-            for joint in spring.joints {
+        for chain in layout.chains {
+            for jointNode in chain.jointNodes {
                 defer { boneIndex += 1 }
                 guard boneIndex < boneBindDirections.count else { continue }
                 let localBindDir = boneBindDirections[boneIndex]
-                if let jointNode = model.nodes[safe: joint.node] {
+                if let jointNode {
                     cachedBindDirEntries.append(CachedBindDirEntry(parent: jointNode.parent, localBindDir: localBindDir))
                     let valid = !localBindDir.x.isNaN && !localBindDir.y.isNaN && !localBindDir.z.isNaN &&
                                 simd_length(localBindDir) >= 0.001
@@ -2753,6 +3044,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                         isValid: valid
                     ))
                 } else {
+                    cachedBindDirEntries.append(CachedBindDirEntry(parent: nil, localBindDir: localBindDir))
                     let identity = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
                     boneInitialAxes.append(CachedBoneInitialAxis(
                         initialRotation: identity,
@@ -2765,68 +3057,39 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
         }
 
-        // 3. Pre-partitioned flat collider arrays (authored + synthetic)
-        var colliderToGroupMask: [Int: UInt32] = [:]
-        for (groupIndex, group) in springBone.colliderGroups.enumerated() {
-            let bit = UInt32(1 << min(groupIndex, 31))
-            for colliderIndex in group.colliders {
-                colliderToGroupMask[colliderIndex, default: 0] |= bit
-            }
-        }
-        cachedColliderToGroupMask = colliderToGroupMask
-        cachedColliderGroupCount = springBone.colliderGroups.count
-        cachedColliderCount = springBone.colliders.count
+        // 3. Pre-partitioned flat collider arrays (authored host+attachment, then cached host synthetic)
+        cachedColliderGroupCount = layout.totalAuthoredColliderGroups
+        cachedColliderCount = layout.authoredColliders.count
 
         cachedSphereColliders.removeAll(keepingCapacity: true)
         cachedCapsuleColliders.removeAll(keepingCapacity: true)
         cachedPlaneColliders.removeAll(keepingCapacity: true)
 
-        for (colliderIndex, collider) in springBone.colliders.enumerated() {
-            guard let colliderNode = model.nodes[safe: collider.node] else { continue }
-            let groupMask = colliderToGroupMask[colliderIndex] ?? 1
+        func appendCached(_ collider: ComposedCollider) {
             switch collider.shape {
             case .sphere(let offset, let radius):
                 cachedSphereColliders.append(CachedSphereEntry(
-                    node: colliderNode, offset: offset, radius: radius, groupMask: groupMask, inside: false))
+                    node: collider.node, offset: offset, radius: radius, groupMask: collider.groupMask, inside: false))
             case .insideSphere(let offset, let radius):
                 cachedSphereColliders.append(CachedSphereEntry(
-                    node: colliderNode, offset: offset, radius: radius, groupMask: groupMask, inside: true))
+                    node: collider.node, offset: offset, radius: radius, groupMask: collider.groupMask, inside: true))
             case .capsule(let offset, let radius, let tail):
                 cachedCapsuleColliders.append(CachedCapsuleEntry(
-                    node: colliderNode, offset: offset, tail: tail, radius: radius, groupMask: groupMask, inside: false))
+                    node: collider.node, offset: offset, tail: tail, radius: radius, groupMask: collider.groupMask, inside: false))
             case .insideCapsule(let offset, let radius, let tail):
                 cachedCapsuleColliders.append(CachedCapsuleEntry(
-                    node: colliderNode, offset: offset, tail: tail, radius: radius, groupMask: groupMask, inside: true))
+                    node: collider.node, offset: offset, tail: tail, radius: radius, groupMask: collider.groupMask, inside: true))
             case .plane(let offset, let normal):
                 cachedPlaneColliders.append(CachedPlaneEntry(
-                    node: colliderNode, offset: offset, normal: normal, groupMask: groupMask))
+                    node: collider.node, offset: offset, normal: normal, groupMask: collider.groupMask))
             }
         }
 
-        // Mirror appendSyntheticColliders (issue #309) into the flat caches when a
-        // free unaliased group bit exists (< 32 authored groups).
-        if !springBone.syntheticColliders.isEmpty && springBone.colliderGroups.count < 32 {
-            let syntheticGroupMask: UInt32 = 1 << UInt32(min(springBone.colliderGroups.count, 31))
-            for collider in springBone.syntheticColliders {
-                guard let colliderNode = model.nodes[safe: collider.node] else { continue }
-                switch collider.shape {
-                case .sphere(let offset, let radius):
-                    cachedSphereColliders.append(CachedSphereEntry(
-                        node: colliderNode, offset: offset, radius: radius, groupMask: syntheticGroupMask, inside: false))
-                case .insideSphere(let offset, let radius):
-                    cachedSphereColliders.append(CachedSphereEntry(
-                        node: colliderNode, offset: offset, radius: radius, groupMask: syntheticGroupMask, inside: true))
-                case .capsule(let offset, let radius, let tail):
-                    cachedCapsuleColliders.append(CachedCapsuleEntry(
-                        node: colliderNode, offset: offset, tail: tail, radius: radius, groupMask: syntheticGroupMask, inside: false))
-                case .insideCapsule(let offset, let radius, let tail):
-                    cachedCapsuleColliders.append(CachedCapsuleEntry(
-                        node: colliderNode, offset: offset, tail: tail, radius: radius, groupMask: syntheticGroupMask, inside: true))
-                case .plane:
-                    assertionFailure("rebuildTargetCaptureCaches received a synthetic .plane; planes are not supported on the synthetic upload path")
-                    continue
-                }
-            }
+        for collider in layout.authoredColliders {
+            appendCached(collider)
+        }
+        for collider in layout.syntheticColliders {
+            appendCached(collider)
         }
     }
 
@@ -2834,8 +3097,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// Called once at the start of the frame before substep loop
     /// Captures: root positions, world bind directions, collider transforms
     private func captureTargetTransforms(model: VRMModel) {
-        guard let springBone = model.springBone else { return }
-        ensureTargetCaptureCaches(model: model, springBone: springBone)
+        ensureTargetCaptureCaches(model: model)
 
         // 1. Capture root positions
         targetRootPositions.removeAll(keepingCapacity: true)
@@ -3143,8 +3405,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// interpolates between to compute per-substep incremental deltas.
     private func captureTargetCenterWorldMatrices(model: VRMModel) {
         for record in centerSpringRecords {
-            if let centerNode = model.nodes[safe: record.centerNodeIndex] {
-                targetCenterWorldMatrices[record.centerNodeIndex] = centerNode.worldMatrix
+            if let centerNode = record.centerNode, let centerID = record.centerNodeID {
+                targetCenterWorldMatrices[centerID] = centerNode.worldMatrix
             }
         }
     }
@@ -3185,21 +3447,25 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             centerDeltaScratch.removeAll(keepingCapacity: true)
             for (i, record) in centerSpringRecords.enumerated() {
                 let delta: float4x4
-                if let cached = centerDeltaScratch[record.centerNodeIndex] {
-                    delta = cached
-                } else if let prevMatrix = previousCenterWorldMatrices[record.centerNodeIndex],
-                          let targetMatrix = targetCenterWorldMatrices[record.centerNodeIndex] {
-                    if prevMatrix == targetMatrix {
-                        delta = matrix_identity_float4x4
+                if let centerID = record.centerNodeID {
+                    if let cached = centerDeltaScratch[centerID] {
+                        delta = cached
+                    } else if let prevMatrix = previousCenterWorldMatrices[centerID],
+                              let targetMatrix = targetCenterWorldMatrices[centerID] {
+                        if prevMatrix == targetMatrix {
+                            delta = matrix_identity_float4x4
+                        } else {
+                            let centerAtPrev = mixMatrices(prevMatrix, targetMatrix, tPrev)
+                            let centerAtCurr = mixMatrices(prevMatrix, targetMatrix, tCurr)
+                            delta = centerAtCurr * centerAtPrev.inverse
+                        }
+                        centerDeltaScratch[centerID] = delta
                     } else {
-                        let centerAtPrev = mixMatrices(prevMatrix, targetMatrix, tPrev)
-                        let centerAtCurr = mixMatrices(prevMatrix, targetMatrix, tCurr)
-                        delta = centerAtCurr * centerAtPrev.inverse
+                        delta = matrix_identity_float4x4
+                        centerDeltaScratch[centerID] = delta
                     }
-                    centerDeltaScratch[record.centerNodeIndex] = delta
                 } else {
                     delta = matrix_identity_float4x4
-                    centerDeltaScratch[record.centerNodeIndex] = delta
                 }
                 let slot = s * numRecords + i
                 ptr[slot] = CenterDeltaRecordGPU(
@@ -3226,8 +3492,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// Records the current frame's center node world matrices for use next frame.
     private func commitCenterWorldMatrices(model: VRMModel) {
         for record in centerSpringRecords {
-            if let centerNode = model.nodes[safe: record.centerNodeIndex] {
-                previousCenterWorldMatrices[record.centerNodeIndex] = centerNode.worldMatrix
+            if let centerNode = record.centerNode, let centerID = record.centerNodeID {
+                previousCenterWorldMatrices[centerID] = centerNode.worldMatrix
             }
         }
     }
@@ -3414,13 +3680,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         wakeAllChains()
 
         // Step 1: Capture current animated positions for root bones
-        guard let springBone = model.springBone else { return }
+        guard let layout = activeLayout else { return }
 
         var animatedPositions: [SIMD3<Float>] = []
-        for spring in springBone.springs {
-            if let firstJoint = spring.joints.first,
-               let node = model.nodes[safe: firstJoint.node] {
-                animatedPositions.append(node.worldPosition)
+        animatedPositions.reserveCapacity(layout.chains.count)
+        for chain in layout.chains {
+            if let first = chain.jointNodes.first, let rootNode = first {
+                animatedPositions.append(rootNode.worldPosition)
             }
         }
 
@@ -3430,20 +3696,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // Step 3: Also reset interpolation state to match
         resetInterpolationState()
 
-        // Step 3.5: Fill the substep-0 center-delta slice with identity
-        // deltas. executeXPBDStep dispatches springBoneApplyCenterDelta
-        // whenever centerSpringRecords is non-empty, but the per-frame fill
-        // lives in update(), which warmup bypasses — without this the kernel
-        // reads whatever memory the allocation recycled. Zero pages happen
-        // to no-op (boneCount == 0), recycled heap shifts arbitrary bone
-        // ranges by garbage matrices, making the settled pose differ on
-        // every in-process reload. Centers are static during warmup, so
-        // prev == target yields the correct identity delta per record.
+        // Step 3.5: Fill the substep-0 center-delta slice with identity deltas.
         if !centerSpringRecords.isEmpty {
             captureTargetCenterWorldMatrices(model: model)
             for record in centerSpringRecords {
-                if let target = targetCenterWorldMatrices[record.centerNodeIndex] {
-                    previousCenterWorldMatrices[record.centerNodeIndex] = target
+                if let centerID = record.centerNodeID,
+                   let target = targetCenterWorldMatrices[centerID] {
+                    previousCenterWorldMatrices[centerID] = target
                 }
             }
             fillCenterDeltaBufferForFrame(substepCount: 1)

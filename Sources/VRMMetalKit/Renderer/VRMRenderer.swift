@@ -586,6 +586,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     private var lastMaterialRevision: UInt64 = 0
     private var lastSkinLayoutRevision: UInt64 = 0
     private var lastSkinContentRevision: UInt64 = 0
+    private var lastPhysicsRevision: UInt64 = 0
     private var lastLegacyHeuristicsFlag: Bool = false
 
     // Skinning
@@ -1095,6 +1096,26 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
     }
 
+    /// Atomically commits pending SpringBone layout changes (attached or detached
+    /// physics cosmetics) to the host's single GPU solver while preserving live state
+    /// on surviving chains and running selective warmup only on newly attached chains.
+    public func commitSpringBoneChanges(
+        warmupNewChainSteps: Int = 15,
+        limits: VRMLoaderLimits = .default
+    ) throws {
+        guard let model, let springBoneCompute = springBoneComputeSystem else { return }
+        try model.withLock {
+            model.updateAttachmentWorldTransformsLocked()
+            springBoneCompute.springBoneOverride = self.springBoneOverride
+            try springBoneCompute.rebuildSpringBoneData(
+                model: model,
+                warmupNewChainSteps: warmupNewChainSteps,
+                limits: limits
+            )
+            lastPhysicsRevision = model.physicsRevision
+        }
+    }
+
     /// Invalidates cached render items, contact-shadow bounds, and hair-highlight lookups
     /// so they are rebuilt on the next draw.
     public func invalidateRenderItems() {
@@ -1367,6 +1388,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         lastMaterialRevision = model.materialRevision
         lastSkinLayoutRevision = model.skinLayoutRevision
         lastSkinContentRevision = model.skinContentRevision
+        lastPhysicsRevision = model.physicsRevision
         lastLegacyHeuristicsFlag = config.legacyMaterialHeuristics
 
         // Rest-pose hips anchor for the skinned-primitive frustum cull
@@ -1406,11 +1428,21 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Initialize base material colors for expression-driven material color binds
         expressionController?.refreshBaseMaterialColors(from: model)
 
-        // Initialize SpringBone GPU compute system if available
-        if model.springBone != nil {
+        // Initialize SpringBone GPU compute system if host or attached cosmetics have SpringBone data
+        let hasPhysics = model.withLock { model.hasAnySpringBoneLocked() }
+        if hasPhysics {
             do {
                 springBoneComputeSystem?.springBoneOverride = self.springBoneOverride
-                try springBoneComputeSystem?.populateSpringBoneData(model: model)
+                if model.springBoneBuffers != nil && model.attachments.allSatisfy({ $0.springBone == nil }) {
+                    try springBoneComputeSystem?.populateSpringBoneData(model: model)
+                } else {
+                    try model.withLock {
+                        try springBoneComputeSystem?.rebuildSpringBoneData(
+                            model: model,
+                            warmupNewChainSteps: 0
+                        )
+                    }
+                }
                 vrmLog("[VRMRenderer] SpringBone GPU compute system initialized")
                 vrmLog("  - Total bones: \(model.springBoneBuffers?.numBones ?? 0)")
                 vrmLog("  - Sphere colliders: \(model.springBoneBuffers?.numSpheres ?? 0)")
@@ -1954,6 +1986,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 lastMaterialRevision = model.materialRevision
                 lastSkinLayoutRevision = model.skinLayoutRevision
                 lastSkinContentRevision = model.skinContentRevision
+                lastPhysicsRevision = model.physicsRevision
                 lastLegacyHeuristicsFlag = config.legacyMaterialHeuristics
                 cacheNeedsRebuild = true
                 cachedRenderItems = nil
@@ -2145,11 +2178,27 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         frameDeltaTime = clampedDeltaTime
         uvAnimationTime += TimeInterval(clampedDeltaTime)
 
+        // Synchronize SpringBone layout automatically if cosmetics with SpringBone were
+        // attached/detached since the previous frame (before SpringBone.update runs).
+        if enableSpringBone, model.physicsRevision != lastPhysicsRevision {
+            model.updateAttachmentWorldTransformsLocked()
+            do {
+                springBoneComputeSystem?.springBoneOverride = self.springBoneOverride
+                try springBoneComputeSystem?.rebuildSpringBoneData(
+                    model: model,
+                    warmupNewChainSteps: 15
+                )
+            } catch {
+                vrmLogPhysics("⚠️ [VRMRenderer] Dynamic SpringBone rebuild failed: \(error)")
+            }
+            lastPhysicsRevision = model.physicsRevision
+        }
+
         // Update SpringBone GPU physics BEFORE the render encoder is created.
         // Spring-bone now shares the renderer's command buffer (audit's #2 bottleneck
         // fix), so its compute encoder must be opened+closed before any other encoder
         // (compute or render) is active on the same buffer — Metal forbids overlap.
-        if enableSpringBone, model.springBone != nil {
+        if enableSpringBone, model.hasAnySpringBoneLocked(), model.springBoneBuffers != nil {
             performanceTracker?.beginPhase(.springBone)
 
             // Update temporary forces if any

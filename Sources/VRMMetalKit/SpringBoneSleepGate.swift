@@ -180,6 +180,21 @@ public struct SpringBoneSleepGate: Equatable, Sendable {
         sleepingBoneCount = 0
     }
 
+    /// Restores explicit per-chain sleep flags and counters (used to preserve
+    /// surviving chains' sleep state across dynamic SpringBone layout rebuilds).
+    internal mutating func restoreState(asleep newAsleep: [Bool], counters newCounters: [Int], ranges: [Range<Int>]) {
+        guard newAsleep.count == asleep.count, newCounters.count == counters.count else { return }
+        asleep = newAsleep
+        counters = newCounters
+        var boneCount = 0
+        for i in asleep.indices where asleep[i] {
+            if i < ranges.count {
+                boneCount += ranges[i].count
+            }
+        }
+        sleepingBoneCount = boneCount
+    }
+
     /// `true` when there is at least one chain and every chain is asleep.
     public var allAsleep: Bool {
         !asleep.isEmpty && asleep.allSatisfy { $0 }
