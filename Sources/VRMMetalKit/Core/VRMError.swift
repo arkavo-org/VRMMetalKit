@@ -36,6 +36,15 @@ public enum VRMError: Error {
 
     /// A VRMA animation file parsed structurally but contains zero playable tracks.
     case emptyAnimation(filePath: String?, channelCount: Int, samplerCount: Int, duration: Float)
+
+    /// Rigid attachment was called with a skinned cosmetic asset without opting into rigidification.
+    case unsupportedSkinnedAttachment(assetName: String?, skinCount: Int)
+
+    /// The requested humanoid anchor bone does not exist on the target avatar.
+    case anchorBoneNotFound(bone: VRMHumanoidBone)
+
+    /// Combined host and cosmetic SpringBone authored collider groups exceed the 32-bit mask budget.
+    case colliderGroupLimitExceeded(limit: Int, observed: Int)
 }
 
 extension VRMError: LocalizedError {
@@ -101,6 +110,40 @@ extension VRMError: LocalizedError {
             Suggestion: Re-export the animation from the capture or authoring tool and verify that at least one humanoid bone, expression, or lookAt channel has non-empty keyframes.
 
             VRM Spec: https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm_animation-1.0/README.md
+            """
+
+        case .unsupportedSkinnedAttachment(let assetName, let skinCount):
+            let label = assetName ?? "unnamed cosmetic asset"
+            return """
+            ❌ Skinned Cosmetic Passed to Rigid Attach
+
+            Asset '\(label)' contains \(skinCount) skin(s) and cannot be attached rigidly via `attach(_:to:options:)` by default.
+
+            Suggestion: Call `attachSkinned(_:options:)` to remap the garment onto the avatar's skeleton, or pass `VRMAttachmentOptions(rigidifySkinnedMeshes: true)` to explicitly strip skinning attributes and attach it rigidly.
+
+            VRM Spec: https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/humanoid.md
+            """
+
+        case .anchorBoneNotFound(let bone):
+            return """
+            ❌ Anchor Humanoid Bone Not Found: '\(bone.rawValue)'
+
+            The target VRMModel has no valid node mapped to humanoid bone '\(bone.rawValue)'.
+
+            Suggestion: Verify the avatar's `humanoid` mapping includes '\(bone.rawValue)', or attach directly to an explicit scene node via `attach(_:toNode:options:)`.
+
+            VRM Spec: https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/humanoid.md
+            """
+
+        case .colliderGroupLimitExceeded(let limit, let observed):
+            return """
+            ❌ SpringBone Collider Group Budget Exceeded
+
+            Combined host and attached cosmetic authored collider groups (\(observed)) exceed the maximum supported count (\(limit)) within the 32-bit GPU collider group bitmask (slots 30–31 are reserved for cross-avatar foreign colliders and host synthetic swept-CCD colliders).
+
+            Suggestion: Merge redundant collider groups in the cosmetic asset or detach unused physics accessories before attaching new ones.
+
+            VRM Spec: https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_springBone-1.0/README.md
             """
         }
     }

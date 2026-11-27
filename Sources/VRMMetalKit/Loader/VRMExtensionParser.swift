@@ -220,6 +220,49 @@ public class VRMExtensionParser {
         return model
     }
 
+    internal struct CosmeticExtensionData {
+        var specVersion: VRMSpecVersion = .v1_0
+        var name: String? = nil
+        var humanoid: VRMHumanoid? = nil
+        var springBone: VRMSpringBone? = nil
+        var vrm0MaterialProperties: [VRM0MaterialProperty] = []
+    }
+
+    internal func parseCosmeticExtensions(
+        document: GLTFDocument,
+        filePath: String? = nil,
+        limits: VRMLoaderLimits = .default
+    ) throws -> CosmeticExtensionData {
+        var result = CosmeticExtensionData()
+
+        if let vrmExt = (document.extensions?["VRMC_vrm"] ?? document.extensions?["VRM"]) as? [String: Any] {
+            let versionKey = vrmExt["specVersion"] != nil ? "specVersion" : "version"
+            if let versionStr = vrmExt[versionKey] as? String {
+                result.specVersion = VRMSpecVersion(rawValue: versionStr) ?? .v0_0
+            } else {
+                result.specVersion = .v0_0
+            }
+            if let metaDict = vrmExt["meta"] as? [String: Any] {
+                result.name = (metaDict["name"] as? String) ?? (metaDict["title"] as? String)
+            }
+            if let humanoidDict = vrmExt["humanoid"] as? [String: Any] {
+                result.humanoid = try? parseHumanoid(humanoidDict)
+            }
+            if let secondaryAnimation = vrmExt["secondaryAnimation"] as? [String: Any] {
+                result.springBone = parseSecondaryAnimation(secondaryAnimation, document: document)
+            }
+            if let materialProperties = vrmExt["materialProperties"] as? [[String: Any]] {
+                result.vrm0MaterialProperties = parseMaterialProperties(materialProperties)
+            }
+        }
+
+        if let springBoneExt = document.extensions?["VRMC_springBone"] as? [String: Any] {
+            result.springBone = try parseSpringBone(springBoneExt)
+        }
+
+        return result
+    }
+
     // MARK: - VRM 0.x Material Properties Parsing
 
     private func parseMaterialProperties(_ properties: [[String: Any]]) -> [VRM0MaterialProperty] {

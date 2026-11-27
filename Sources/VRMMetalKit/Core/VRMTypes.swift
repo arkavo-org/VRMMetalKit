@@ -343,7 +343,7 @@ public struct VRMLookAtRangeMap {
 // MARK: - First Person
 
 /// First-person visibility flag for a mesh annotation. Mirrors VRM 1.0 `firstPerson.meshAnnotations[].type`.
-public enum VRMFirstPersonFlag: String {
+public enum VRMFirstPersonFlag: String, Sendable {
     /// Automatically hide if the mesh is parented to the head, otherwise show.
     case auto
     /// Visible in both first-person and third-person views.
@@ -723,7 +723,7 @@ public struct VRMShadingShiftTexture {
 }
 
 /// MToon outline width interpretation. Mirrors VRM 1.0 `mtoon.outlineWidthMode`.
-public enum VRMOutlineWidthMode: String {
+public enum VRMOutlineWidthMode: String, Sendable {
     /// Outline rendering disabled.
     case none
     /// ``VRMMToonMaterial/outlineWidthFactor`` is in metres along the surface

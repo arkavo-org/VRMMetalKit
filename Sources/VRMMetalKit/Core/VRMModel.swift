@@ -182,6 +182,9 @@ public class VRMModel: VRMSceneContent, @unchecked Sendable {
         }
 
         collect(from: self)
+        for attachment in attachments {
+            collect(from: attachment)
+        }
 
         if let sb = springBoneBuffers {
             appendIfNew(sb.bonePosPrev)
@@ -292,6 +295,36 @@ public class VRMModel: VRMSceneContent, @unchecked Sendable {
     /// Skin data for skeletal animation (joint matrices, inverse bind matrices).
     public var skins: [VRMSkin] = []
 
+    // MARK: - Cosmetic Side Scenes & Body Masks
+
+    /// Live attached 3D cosmetic side scenes managed by ``attach(_:to:options:)``
+    /// and ``attachSkinned(_:options:)``.
+    public internal(set) var attachments: [VRMAttachmentInstance] = []
+
+    /// Composable named vertex body-mask layers applied to bit 1 of skinned primitives'
+    /// per-vertex hidden-flag buffers.
+    internal var bodyMaskLayers: [String: [ObjectIdentifier: [UInt8]]] = [:]
+
+    /// Returns `[self] + attachments` for uniform rendering traversal. Caller must hold `lock`.
+    internal func allSceneContentsLocked() -> [any VRMSceneContent] {
+        var result: [any VRMSceneContent] = [self]
+        result.reserveCapacity(1 + attachments.count)
+        for attachment in attachments {
+            result.append(attachment)
+        }
+        return result
+    }
+
+    /// Returns all base and attached skins in deterministic order. Caller must hold `lock`.
+    internal func allSkinsLocked() -> [VRMSkin] {
+        if attachments.isEmpty { return skins }
+        var result = skins
+        for attachment in attachments where !attachment.skins.isEmpty {
+            result.append(contentsOf: attachment.skins)
+        }
+        return result
+    }
+
     // MARK: - Runtime State
 
     /// Base URL for resolving relative resource paths (set during loading).
@@ -359,25 +392,46 @@ public class VRMModel: VRMSceneContent, @unchecked Sendable {
     /// Bind-pose model-space AABB across every primitive's `localMin`/`localMax`. Computed lazily and cached.
     public var modelLocalBounds: (min: SIMD3<Float>, max: SIMD3<Float>) {
         _boundsLock.lock()
+        if let b = _cachedLocalBounds {
+            _boundsLock.unlock()
+            return b
+        }
+        _boundsLock.unlock()
+        finalizeModelLocalBounds()
+        _boundsLock.lock()
         defer { _boundsLock.unlock() }
-        if let b = _cachedLocalBounds { return b }
-        let bounds = computeModelLocalBoundsLocked()
-        _cachedLocalBounds = bounds
-        return bounds
+        return _cachedLocalBounds ?? (min: SIMD3<Float>(-0.5, 0, -0.5), max: SIMD3<Float>(0.5, 1.8, 0.5))
+    }
+
+    /// Lock-safe variant for callers that already hold `model.lock` (such as `VRMRenderer.drawCore`).
+    internal func modelLocalBoundsLocked() -> (min: SIMD3<Float>, max: SIMD3<Float>) {
+        _boundsLock.lock()
+        if let b = _cachedLocalBounds {
+            _boundsLock.unlock()
+            return b
+        }
+        _boundsLock.unlock()
+        let computed = computeModelLocalBoundsWithModelLock()
+        _boundsLock.lock()
+        _cachedLocalBounds = computed
+        _boundsLock.unlock()
+        return computed
     }
 
     /// Eagerly computes and caches `modelLocalBounds`. Call this once after
-    /// the model's meshes are populated (e.g. at the end of `load(...)`) so
-    /// subsequent concurrent reads from any thread hit the cached value
-    /// without contending on the lazy-compute path.
+    /// the model's meshes or attachments are populated so subsequent concurrent
+    /// reads from any thread hit the cached value without contending on `lock`.
     public func finalizeModelLocalBounds() {
+        let computed = withLock {
+            computeModelLocalBoundsWithModelLock()
+        }
         _boundsLock.lock()
-        defer { _boundsLock.unlock() }
-        _cachedLocalBounds = computeModelLocalBoundsLocked()
+        _cachedLocalBounds = computed
+        _boundsLock.unlock()
     }
 
-    /// Caller must hold `_boundsLock`.
-    private func computeModelLocalBoundsLocked() -> (min: SIMD3<Float>, max: SIMD3<Float>) {
+    /// Caller must hold `lock`.
+    private func computeModelLocalBoundsWithModelLock() -> (min: SIMD3<Float>, max: SIMD3<Float>) {
         var lo = SIMD3<Float>(repeating: Float.infinity)
         var hi = SIMD3<Float>(repeating: -Float.infinity)
         var found = false
@@ -386,6 +440,24 @@ public class VRMModel: VRMSceneContent, @unchecked Sendable {
                 lo = simd_min(lo, primitive.localMin)
                 hi = simd_max(hi, primitive.localMax)
                 found = true
+            }
+        }
+        for attachment in attachments where !attachment.isHidden {
+            for node in attachment.nodes {
+                guard let meshIdx = node.mesh, meshIdx >= 0, meshIdx < attachment.meshes.count else { continue }
+                let bindMat = attachment.isSkinnedAttachment
+                    ? matrix_identity_float4x4
+                    : VRMSkeletonRemapper.bindWorldMatrix(of: node)
+                for primitive in attachment.meshes[meshIdx].primitives where primitive.vertexCount > 0 {
+                    let worldAABB = AABBTransform.worldAABB(
+                        localMin: primitive.localMin,
+                        localMax: primitive.localMax,
+                        modelMatrix: bindMat
+                    )
+                    lo = simd_min(lo, worldAABB.min)
+                    hi = simd_max(hi, worldAABB.max)
+                    found = true
+                }
             }
         }
         if !found {
@@ -1088,6 +1160,7 @@ public class VRMModel: VRMSceneContent, @unchecked Sendable {
         for node in nodes where node.parent == nil {
             node.updateWorldTransform()
         }
+        updateAttachmentWorldTransformsLocked()
     }
 
     // MARK: - Index/Accessor Audit
