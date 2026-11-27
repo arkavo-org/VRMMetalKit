@@ -117,6 +117,7 @@ public func processFirstPersonAutoFlags(model: VRMModel, device: MTLDevice) {
                   let vertexBuffer = primitive.vertexBuffer,
                   primitive.vertexCount > 0 else { continue }
 
+            let newBit0: [UInt8]
             if let headJoint = headJointUInt {
                 let attributes = (primitive.attributeBuffer ?? vertexBuffer).contents().bindMemory(
                     to: VRMAttributeVertex.self,
@@ -128,14 +129,26 @@ public func processFirstPersonAutoFlags(model: VRMModel, device: MTLDevice) {
                     joints[i] = attributes[i].joints
                     weights[i] = attributes[i].weights
                 }
-                primitive.firstPersonHiddenFlags = VRMPrimitive.computeFirstPersonHiddenFlags(
+                newBit0 = VRMPrimitive.computeFirstPersonHiddenFlags(
                     joints: joints,
                     weights: weights,
                     headJointIndex: headJoint
                 )
             } else {
-                primitive.firstPersonHiddenFlags = [UInt8](repeating: 0, count: primitive.vertexCount)
+                newBit0 = [UInt8](repeating: 0, count: primitive.vertexCount)
             }
+
+            // Preserve bit 1 (composable body masks) while updating bit 0 (first-person culling).
+            if primitive.firstPersonHiddenFlags.count == primitive.vertexCount {
+                var merged = [UInt8](repeating: 0, count: primitive.vertexCount)
+                for i in 0..<primitive.vertexCount {
+                    merged[i] = (primitive.firstPersonHiddenFlags[i] & 0x02) | (newBit0[i] & 0x01)
+                }
+                primitive.firstPersonHiddenFlags = merged
+            } else {
+                primitive.firstPersonHiddenFlags = newBit0
+            }
+            // Allocates a fresh MTLBuffer so in-flight GPU frames never see torn writes.
             primitive.uploadFirstPersonHiddenFlagsBuffer(device: device)
         }
     }

@@ -971,6 +971,130 @@ public class VRMPrimitive: @unchecked Sendable {
         )
         firstPersonHiddenFlagsBuffer?.label = "FirstPerson Hidden Flags"
     }
+
+    /// Creates a CPU-side clone sharing immutable GPU buffers (`vertexBuffer`,
+    /// `attributeBuffer`, `indexBuffer`, morph buffers) with copy-on-write safety
+    /// when per-instance mutations (joint sanitization, scaling, body masks) occur.
+    internal func cloneSharingGPUBuffers() -> VRMPrimitive {
+        let copy = VRMPrimitive()
+        copy.vertexBuffer = vertexBuffer
+        copy.attributeBuffer = attributeBuffer
+        copy.indexBuffer = indexBuffer
+        copy.vertexCount = vertexCount
+        copy.indexCount = indexCount
+        copy.indexType = indexType
+        copy.indexBufferOffset = indexBufferOffset
+        copy.primitiveType = primitiveType
+        copy.materialIndex = materialIndex
+        copy.hasNormals = hasNormals
+        copy.hasTexCoords = hasTexCoords
+        copy.hasTangents = hasTangents
+        copy.hasColors = hasColors
+        copy.hasJoints = hasJoints
+        copy.hasWeights = hasWeights
+        copy.requiredPaletteSize = requiredPaletteSize
+        copy.morphTargets = morphTargets
+        copy.morphPositionBuffers = morphPositionBuffers
+        copy.morphNormalBuffers = morphNormalBuffers
+        copy.morphTangentBuffers = morphTangentBuffers
+        copy.morphPositionsSoA = morphPositionsSoA
+        copy.morphNormalsSoA = morphNormalsSoA
+        copy.basePositionsBuffer = basePositionsBuffer
+        copy.baseNormalsBuffer = baseNormalsBuffer
+        copy.localMin = localMin
+        copy.localMax = localMax
+        copy.isHidden = isHidden
+        copy.firstPersonHiddenFlags = firstPersonHiddenFlags
+        copy.firstPersonHiddenFlagsBuffer = nil
+        copy.skinningInputSample = skinningInputSample
+        copy.positionAccessorIndex = positionAccessorIndex
+        copy.jointsAccessorIndex = jointsAccessorIndex
+        copy.weightsAccessorIndex = weightsAccessorIndex
+        return copy
+    }
+
+    /// Duplicates `attributeBuffer` onto a fresh Metal buffer before mutating
+    /// joint indices/weights in place so shared blueprint assets stay immutable.
+    internal func ensureMutableAttributeBuffer(device: MTLDevice?) {
+        guard let src = attributeBuffer, let dev = device ?? src.device as MTLDevice? else { return }
+        guard let dst = dev.makeBuffer(bytes: src.contents(), length: src.length, options: .storageModeShared) else { return }
+        dst.label = src.label
+        attributeBuffer = dst
+        skinningInputSample = nil
+    }
+
+    /// Uniformly scales vertex positions, morph deltas, and local AABB into fresh
+    /// GPU buffers (copy-on-write) so blueprints remain immutable and DQS/LBS match.
+    internal func scaleGeometryCopyOnWrite(by scale: Float, device: MTLDevice?) {
+        guard abs(scale - 1.0) > 1e-5 else { return }
+
+        localMin *= scale
+        localMax *= scale
+
+        if let src = vertexBuffer, vertexCount > 0 {
+            let dev = device ?? src.device
+            if let dst = dev.makeBuffer(bytes: src.contents(), length: src.length, options: .storageModeShared) {
+                dst.label = src.label
+                let ptr = dst.contents().bindMemory(to: VRMPositionVertex.self, capacity: vertexCount)
+                for i in 0..<vertexCount {
+                    ptr[i].position *= scale
+                }
+                vertexBuffer = dst
+            }
+        }
+
+        if let src = basePositionsBuffer, vertexCount > 0 {
+            let dev = device ?? src.device
+            if let dst = dev.makeBuffer(bytes: src.contents(), length: src.length, options: .storageModeShared) {
+                dst.label = src.label
+                let ptr = dst.contents().bindMemory(to: SIMD3<Float>.self, capacity: vertexCount)
+                for i in 0..<vertexCount {
+                    ptr[i] *= scale
+                }
+                basePositionsBuffer = dst
+            }
+        }
+
+        if !morphTargets.isEmpty {
+            for idx in morphTargets.indices {
+                if var deltas = morphTargets[idx].positionDeltas {
+                    for v in deltas.indices { deltas[v] *= scale }
+                    morphTargets[idx].positionDeltas = deltas
+                }
+            }
+        }
+
+        if !morphPositionBuffers.isEmpty && vertexCount > 0 {
+            var newBuffers: [MTLBuffer] = []
+            newBuffers.reserveCapacity(morphPositionBuffers.count)
+            for src in morphPositionBuffers {
+                let dev = device ?? src.device
+                if let dst = dev.makeBuffer(bytes: src.contents(), length: src.length, options: .storageModeShared) {
+                    dst.label = src.label
+                    let count = src.length / MemoryLayout<SIMD3<Float>>.stride
+                    let ptr = dst.contents().bindMemory(to: SIMD3<Float>.self, capacity: count)
+                    for i in 0..<count { ptr[i] *= scale }
+                    newBuffers.append(dst)
+                } else {
+                    newBuffers.append(src)
+                }
+            }
+            morphPositionBuffers = newBuffers
+        }
+
+        if let src = morphPositionsSoA, !morphTargets.isEmpty && vertexCount > 0 {
+            let dev = device ?? src.device
+            if let dst = dev.makeBuffer(bytes: src.contents(), length: src.length, options: .storageModeShared) {
+                dst.label = src.label
+                let total = morphTargets.count * vertexCount
+                let ptr = dst.contents().bindMemory(to: SIMD3<Float>.self, capacity: total)
+                for i in 0..<total {
+                    ptr[i] *= scale
+                }
+                morphPositionsSoA = dst
+            }
+        }
+    }
 }
 
 // MARK: - Vertex Data
@@ -1743,6 +1867,51 @@ public class VRMMaterial: @unchecked Sendable {
             return transparentWithZWrite ? .blendZWrite : .blend
         default:
             return .opaque
+        }
+    }
+
+    /// Creates a deep CPU clone of a material while remapping its `VRMTexture` wrappers.
+    internal init(cloning other: VRMMaterial, remapTexture: (VRMTexture?) -> VRMTexture?) {
+        self.name = other.name
+        self.baseColorFactor = other.baseColorFactor
+        self.baseColorTexture = remapTexture(other.baseColorTexture)
+        self.normalTexture = remapTexture(other.normalTexture)
+        self.normalScale = other.normalScale
+        self.occlusionTexture = remapTexture(other.occlusionTexture)
+        self.occlusionStrength = other.occlusionStrength
+        self.emissiveTexture = remapTexture(other.emissiveTexture)
+        self.metallicRoughnessTexture = remapTexture(other.metallicRoughnessTexture)
+        self.metallicFactor = other.metallicFactor
+        self.roughnessFactor = other.roughnessFactor
+        self.emissiveFactor = other.emissiveFactor
+        self.doubleSided = other.doubleSided
+        self.alphaMode = other.alphaMode
+        self.alphaCutoff = other.alphaCutoff
+        self.vrmVersion = other.vrmVersion
+        self.renderQueue = other.renderQueue
+        self.transparentWithZWrite = other.transparentWithZWrite
+        self.renderQueueOffset = other.renderQueueOffset
+        self.zWriteEnabled = other.zWriteEnabled
+        self.blendMode = other.blendMode
+        self.khrTextureTransform = other.khrTextureTransform
+        self.normalTextureTransform = other.normalTextureTransform
+        self.occlusionTextureTransform = other.occlusionTextureTransform
+        self.emissiveTextureTransform = other.emissiveTextureTransform
+        self.metallicRoughnessTextureTransform = other.metallicRoughnessTextureTransform
+        if var clonedMToon = other.mtoon {
+            clonedMToon.shadeMultiplyTexture = remapTexture(clonedMToon.shadeMultiplyTexture)
+            if let ss = clonedMToon.shadingShiftTexture, let remapped = remapTexture(ss.texture) {
+                clonedMToon.shadingShiftTexture = VRMShadingShiftTexture(
+                    texture: remapped,
+                    texCoord: ss.texCoord,
+                    scale: ss.scale
+                )
+            }
+            clonedMToon.matcapTexture = remapTexture(clonedMToon.matcapTexture)
+            clonedMToon.rimMultiplyTexture = remapTexture(clonedMToon.rimMultiplyTexture)
+            clonedMToon.outlineWidthMultiplyTexture = remapTexture(clonedMToon.outlineWidthMultiplyTexture)
+            clonedMToon.uvAnimationMaskTexture = remapTexture(clonedMToon.uvAnimationMaskTexture)
+            self.mtoon = clonedMToon
         }
     }
 

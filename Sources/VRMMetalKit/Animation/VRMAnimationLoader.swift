@@ -633,6 +633,11 @@ public enum VRMAnimationLoader {
         if tokens.contains(where: { helperTokens.contains($0) }) {
             return true
         }
+        // VRoid secondary physics bones (e.g. J_Sec_L_Arm_01, J_Sec_L_CoatSkirt_01)
+        // must never match humanoid limbs during fallback heuristics.
+        if base.hasPrefix("j_sec") || base.contains("_sec_") || (tokens.count >= 2 && tokens[0] == "j" && tokens[1] == "sec") {
+            return true
+        }
         if compact.hasSuffix("headtop") || compact.hasSuffix("nub") {
             return true
         }

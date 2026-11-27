@@ -204,7 +204,8 @@ vertex float4 skinned_mtoon_depth_vertex(DepthVertexInSkinned in [[stage_in]],
           skinnedPosition, skinnedNormal);
  float4 worldPos = uniforms.modelMatrix * skinnedPosition;
  float4 clip = uniforms.projectionMatrix * (uniforms.viewMatrix * worldPos);
- if (uniforms.cameraMode == 1u && firstPersonHiddenFlags[vertexID] != 0u) {
+ uint8_t hideMask = (uniforms.cameraMode == 1u) ? 0x03u : 0x02u;
+ if ((firstPersonHiddenFlags[vertexID] & hideMask) != 0u) {
      clip = float4(0.0, 0.0, -2.0, 0.0); // w=0 → clipped
  }
  return clip;
@@ -285,11 +286,11 @@ vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
                             material.hasOutlineWidthMultiplyTexture > 0);
  }
 
- // First-person head-bone culling: degenerate the position so the triangle is
- // clipped. Runs AFTER the hull extrusion: the world-coordinates branch
- // recomputes clipPos from worldPos, which would resurrect a vertex degenerated
- // before it and draw the hidden head's outline hull straight into the camera.
- if (uniforms.cameraMode == 1u && firstPersonHiddenFlags[vertexID] != 0u) {
+ // First-person head-bone culling (bit 0) and composable body masking (bit 1):
+ // degenerate the position so the triangle is clipped. Runs AFTER the hull
+ // extrusion because the world-coordinates branch recomputes clipPos from worldPos.
+ uint8_t hideMask = (uniforms.cameraMode == 1u) ? 0x03u : 0x02u;
+ if ((firstPersonHiddenFlags[vertexID] & hideMask) != 0u) {
      out.position = float4(0.0, 0.0, -2.0, 0.0); // w=0 → clipped by homogeneous divide
  }
 
@@ -401,9 +402,10 @@ vertex VertexOut skinned_mtoon_outline_vertex(VertexIn in [[stage_in]],
  out.viewDirection = normalize(cameraWorldPos - out.worldPosition);
  out.viewNormal = normalize((uniforms.viewMatrix * float4(out.worldNormal, 0.0)).xyz);
 
- // First-person head-bone culling, after the extrusion for the same reason as
- // in the body shader: the world-coordinates branch rebuilds clipPos.
- if (uniforms.cameraMode == 1u && firstPersonHiddenFlags[vertexID] != 0u) {
+ // First-person head-bone culling (bit 0) and composable body masking (bit 1),
+ // after extrusion because the world-coordinates branch rebuilds clipPos.
+ uint8_t hideMask = (uniforms.cameraMode == 1u) ? 0x03u : 0x02u;
+ if ((firstPersonHiddenFlags[vertexID] & hideMask) != 0u) {
      out.position = float4(0.0, 0.0, -2.0, 0.0); // w=0 → clipped by homogeneous divide
  }
 
