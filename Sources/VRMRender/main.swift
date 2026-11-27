@@ -103,6 +103,7 @@ struct RenderOptions {
     var gaze: String? = nil
     var bodyYaw: Float = 0
     var blink: Float? = nil
+    var cosmeticsQAOutputDir: String? = nil
 }
 
 // MARK: - Errors
@@ -170,6 +171,8 @@ func printUsage() {
         --blink <0-1>              Set the blink expression weight (eyes closed
                                    at 1.0). Convenience for --expression blink;
                                    composes with --expression.
+        --cosmetics-qa <dir>       Run the 6-panel VRMMetalKit 2.0 real-avatar
+                                   cosmetics visual QA & contact-sheet suite into <dir>
         --list-debug               List all debug modes
         --help                     Show this help message
     
@@ -289,6 +292,11 @@ func parseArguments() -> RenderOptions? {
             if i < args.count, let val = Float(args[i]) {
                 options.blink = max(0, min(1, val))
             }
+        case "--cosmetics-qa":
+            i += 1
+            if i < args.count {
+                options.cosmeticsQAOutputDir = args[i]
+            }
         default:
             if !arg.hasPrefix("-") {
                 positionalArgs.append(arg)
@@ -298,6 +306,16 @@ func parseArguments() -> RenderOptions? {
         i += 1
     }
     
+    if options.cosmeticsQAOutputDir != nil {
+        guard positionalArgs.count >= 1 else {
+            print("Error: Missing input VRM path for --cosmetics-qa")
+            printUsage()
+            return nil
+        }
+        options.inputPath = positionalArgs[0]
+        return options
+    }
+
     guard positionalArgs.count >= 2 else {
         print("Error: Missing input or output path")
         printUsage()
@@ -351,6 +369,22 @@ struct VRMRenderCLI {
         guard FileManager.default.fileExists(atPath: options.inputPath) else {
             print("Error: Input file not found: \(options.inputPath)")
             exit(1)
+        }
+
+        if let qaDir = options.cosmeticsQAOutputDir {
+            do {
+                let panelSize = (options.width == 1024) ? 768 : options.width
+                try await CosmeticsQARunner.run(
+                    inputPath: options.inputPath,
+                    outputDir: qaDir,
+                    panelSize: panelSize,
+                    sampleCount: options.sampleCount
+                )
+            } catch {
+                print("Error: \(error)")
+                exit(1)
+            }
+            return
         }
         
         // Get Metal device

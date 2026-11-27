@@ -108,22 +108,22 @@ public struct VRMFaceLandmarks: Codable, Equatable, Sendable {
         return rect
     }
 
-    /// Default landmark preset matching the standard VRoid Studio / `native-anime-v1`
-    /// face UV layout (`(0, 0)` top-left, `(1, 1)` bottom-right).
+    /// Default landmark preset calibrated to the standard VRoid Studio / `native-anime-v1`
+    /// face UV layout (`(0, 0)` top-left, `(1, 1)` bottom-right; avatar left is `U > 0.5`).
     public static let vroidDefault = VRMFaceLandmarks(
         schemaVersion: currentSchemaVersion,
         faceMaterialNames: defaultFaceMaterialNames,
         regions: [
             .fullFace:   VRMUVRect(minU: 0.00, minV: 0.00, maxU: 1.00, maxV: 1.00),
-            .forehead:   VRMUVRect(minU: 0.28, minV: 0.18, maxU: 0.72, maxV: 0.38),
-            .leftBrow:   VRMUVRect(minU: 0.52, minV: 0.36, maxU: 0.70, maxV: 0.44),
-            .rightBrow:  VRMUVRect(minU: 0.30, minV: 0.36, maxU: 0.48, maxV: 0.44),
-            .leftEye:    VRMUVRect(minU: 0.52, minV: 0.42, maxU: 0.70, maxV: 0.54),
-            .rightEye:   VRMUVRect(minU: 0.30, minV: 0.42, maxU: 0.48, maxV: 0.54),
-            .leftCheek:  VRMUVRect(minU: 0.54, minV: 0.54, maxU: 0.72, maxV: 0.66),
-            .rightCheek: VRMUVRect(minU: 0.28, minV: 0.54, maxU: 0.46, maxV: 0.66),
-            .nose:       VRMUVRect(minU: 0.45, minV: 0.50, maxU: 0.55, maxV: 0.62),
-            .lips:       VRMUVRect(minU: 0.40, minV: 0.64, maxU: 0.60, maxV: 0.74),
+            .forehead:   VRMUVRect(minU: 0.26, minV: 0.22, maxU: 0.74, maxV: 0.41),
+            .leftBrow:   VRMUVRect(minU: 0.56, minV: 0.40, maxU: 0.76, maxV: 0.48),
+            .rightBrow:  VRMUVRect(minU: 0.24, minV: 0.40, maxU: 0.44, maxV: 0.48),
+            .leftEye:    VRMUVRect(minU: 0.55, minV: 0.46, maxU: 0.78, maxV: 0.61),
+            .rightEye:   VRMUVRect(minU: 0.22, minV: 0.46, maxU: 0.45, maxV: 0.61),
+            .leftCheek:  VRMUVRect(minU: 0.57, minV: 0.58, maxU: 0.75, maxV: 0.72),
+            .rightCheek: VRMUVRect(minU: 0.25, minV: 0.58, maxU: 0.43, maxV: 0.72),
+            .nose:       VRMUVRect(minU: 0.45, minV: 0.60, maxU: 0.55, maxV: 0.70),
+            .lips:       VRMUVRect(minU: 0.42, minV: 0.72, maxU: 0.58, maxV: 0.80),
         ]
     )
 

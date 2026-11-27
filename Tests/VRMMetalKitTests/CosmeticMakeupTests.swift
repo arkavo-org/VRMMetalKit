@@ -268,8 +268,8 @@ final class CosmeticMakeupTests: XCTestCase {
         ]
         let out = try stack.composite(baseTexture: base, sRGB: false).color
 
-        // Inside vroidDefault.lips (u in [0.40, 0.60], v in [0.64, 0.74]) -> (32, 44)
-        let inside = readPixel(out, x: 32, y: 44)
+        // Inside vroidDefault.lips (u in [0.42, 0.58], v in [0.72, 0.80]) -> (32, 49)
+        let inside = readPixel(out, x: 32, y: 49)
         XCTAssertGreaterThan(inside.r, 240)
         XCTAssertLessThan(inside.b, 80)
 
