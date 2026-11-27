@@ -145,6 +145,10 @@ final class MToonFunctionConstantKeySharedCacheKeyTests: XCTestCase {
         XCTAssertNotEqual(key(base), key(variant), "hasParametricRim")
 
         variant = base
+        variant.hasFinishMapTexture = true
+        XCTAssertNotEqual(key(base), key(variant), "hasFinishMapTexture")
+
+        variant = base
         variant.alphaMode = 2
         XCTAssertNotEqual(key(base), key(variant), "alphaMode")
 

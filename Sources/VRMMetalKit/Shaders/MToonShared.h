@@ -61,7 +61,7 @@ struct Uniforms {
 };
 
 // Scalar and float4 fields only (no float3) so the Metal layout matches
-// Swift's `MToonMaterialUniforms` stride exactly: 35 blocks x 16 bytes = 560 bytes.
+// Swift's `MToonMaterialUniforms` stride exactly: 37 blocks x 16 bytes = 592 bytes.
 struct MToonMaterial {
  // Block 0: 16 bytes - Base material properties
  float4 baseColorFactor;                    // 16 bytes
@@ -154,7 +154,7 @@ struct MToonMaterial {
  float hairHighlightStrength;               // 4 bytes; 0 = no hair band on this material
  float hairHighlightSharpness;              // 4 bytes; 1...64, higher = narrower band
  float ssaoStrength;                        // 4 bytes; 0 = no crease AO
- float _extensionPad0;                      // 4 bytes padding
+ int hasFinishMapTexture;                   // 4 bytes; non-zero = per-pixel finish map at texture(9)
 
  // Block 16: 16 bytes - Outline minimum-width guard band
  float outlineMinPixels;                    // 4 bytes; 0 = authored width only
@@ -182,6 +182,8 @@ struct MToonMaterial {
  float4 uvAnimationMaskUvRow1;
  float4 outlineWidthMultiplyUvRow0;
  float4 outlineWidthMultiplyUvRow1;
+ float4 finishMapUvRow0;
+ float4 finishMapUvRow1;
 };
 
 static inline float2 applyUvRows(float2 uv, float4 row0, float4 row1) {

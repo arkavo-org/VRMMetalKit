@@ -236,7 +236,8 @@ public struct MToonMaterialUniforms {
     /// Crease AO strength (`0...2`). `0` disables the term; the renderer sets
     /// it from ``RendererConfig/enableSSAO`` and ``RendererConfig/ssaoStrength``.
     public var ssaoStrength: Float = 0.0
-    var _extensionPad0: Float = 0.0
+    /// Non-zero when a per-pixel metallic/roughness finish map is bound at fragment `texture(9)`.
+    public var hasFinishMapTexture: Int32 = 0
 
     // Block 16: 16 bytes - Outline minimum-width guard band
 
@@ -296,6 +297,10 @@ public struct MToonMaterialUniforms {
     public var outlineWidthMultiplyUvRow0: SIMD4<Float> = [1, 0, 0, 0]
     /// Second affine row of the `KHR_texture_transform` on `outlineWidthMultiplyTexture`.
     public var outlineWidthMultiplyUvRow1: SIMD4<Float> = [0, 1, 0, 0]
+    /// First affine row of the `KHR_texture_transform` on `metallicRoughnessTexture` (finish map).
+    public var finishMapUvRow0: SIMD4<Float> = [1, 0, 0, 0]
+    /// Second affine row of the `KHR_texture_transform` on `metallicRoughnessTexture` (finish map).
+    public var finishMapUvRow1: SIMD4<Float> = [0, 1, 0, 0]
 
     /// Creates a default-initialized uniform payload.
     public init() {}
@@ -346,10 +351,11 @@ public struct MToonMaterialUniforms {
         set { outlineColorR = newValue.x; outlineColorG = newValue.y; outlineColorB = newValue.z }
     }
 
-    /// Whether any opt-in surface extension (finish, hair band, crease AO) is
+    /// Whether any opt-in surface extension (finish, per-pixel finish map, hair band, crease AO) is
     /// active in this payload.
     public var usesSurfaceExtensions: Bool {
         metallicFactor > MToonSpecularMode.metallicEpsilon
+            || hasFinishMapTexture != 0
             || hairHighlightStrength > 0
             || ssaoStrength > 0
     }
@@ -621,6 +627,10 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
     /// renderer enables any of them.
     public var enableSurfaceExtensions: Bool
 
+    /// When `true`, samples the per-pixel glTF `G=roughness / B=metallic` finish map
+    /// at fragment `texture(9)`. Dead-stripped when `false`.
+    public var hasFinishMapTexture: Bool
+
     public init(
         useMaterialFlags: Bool = false,
         hasBaseColorTexture: Bool = false,
@@ -637,7 +647,8 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
         lightCount: UInt8 = MToonLightSpecialization.maxLights,
         debugVisualization: Bool = false,
         enableMaterialization: Bool = false,
-        enableSurfaceExtensions: Bool = false
+        enableSurfaceExtensions: Bool = false,
+        hasFinishMapTexture: Bool = false
     ) {
         self.useMaterialFlags = useMaterialFlags
         self.hasBaseColorTexture = hasBaseColorTexture
@@ -655,6 +666,7 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
         self.debugVisualization = debugVisualization
         self.enableMaterialization = enableMaterialization
         self.enableSurfaceExtensions = enableSurfaceExtensions
+        self.hasFinishMapTexture = hasFinishMapTexture
     }
 
     /// The dynamic fallback key that preserves pre-specialization behavior.
@@ -679,6 +691,7 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
         self.lightCount = MToonLightSpecialization.maxLights
         self.debugVisualization = false
         self.enableMaterialization = false
+        self.hasFinishMapTexture = material.hasFinishMapTexture != 0
         self.enableSurfaceExtensions = material.usesSurfaceExtensions
     }
 
@@ -734,6 +747,9 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
         var enableSurfaceExtensions = self.enableSurfaceExtensions
         values.setConstantValue(&enableSurfaceExtensions, type: .bool, index: 15)
 
+        var hasFinishMapTexture = self.hasFinishMapTexture
+        values.setConstantValue(&hasFinishMapTexture, type: .bool, index: 16)
+
         return values
     }
 
@@ -743,7 +759,7 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
     /// shared cache uses for identity, so a field dropped here lets two
     /// distinct variants collide on one compiled pipeline.
     ///
-    /// Bit layout: [skinned:1][umf:1][bc:1][sm:1][ss:1][nm:1][mc:1][rm:1][em:1][oc:1][uv:1][rim:1][alpha:4][lights:2][debug:1][mat:1][ext:1]
+    /// Bit layout: [skinned:1][umf:1][bc:1][sm:1][ss:1][nm:1][mc:1][rm:1][em:1][oc:1][uv:1][rim:1][alpha:4][lights:2][debug:1][mat:1][ext:1][fin:1]
     func sharedCacheKeyBits(isSkinned: Bool) -> UInt32 {
         var bits: UInt32 = isSkinned ? 1 : 0
         bits = (bits << 1) | (useMaterialFlags ? 1 : 0)
@@ -758,16 +774,12 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
         bits = (bits << 1) | (hasUvAnimationMaskTexture ? 1 : 0)
         bits = (bits << 1) | (hasParametricRim ? 1 : 0)
         bits = (bits << 4) | (UInt32(alphaMode) & 0xF)
-        // Folded as the clamped value actually compiled by
-        // `makeFunctionConstantValues`, not the raw field: an out-of-contract
-        // `lightCount` (outside 1...3) must key identically to its clamp
-        // target so it reuses that pipeline instead of manufacturing a
-        // spurious cache entry for a variant Metal never compiles.
         let clampedLightCount = UInt32(max(1, min(lightCount, MToonLightSpecialization.maxLights)))
         bits = (bits << 2) | (clampedLightCount & 0x3)
         bits = (bits << 1) | (debugVisualization ? 1 : 0)
         bits = (bits << 1) | (enableMaterialization ? 1 : 0)
         bits = (bits << 1) | (enableSurfaceExtensions ? 1 : 0)
+        bits = (bits << 1) | (hasFinishMapTexture ? 1 : 0)
         return bits
     }
 
