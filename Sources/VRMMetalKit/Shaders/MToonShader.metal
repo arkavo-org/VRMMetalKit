@@ -99,6 +99,12 @@ constant bool fc_surfaceExtensionsEnabled [[function_constant(15)]];
 constant bool fc_hasSurfaceExtensions = is_function_constant_defined(fc_surfaceExtensionsEnabled)
     ? fc_surfaceExtensionsEnabled : true;
 
+// Per-pixel metallic/roughness finish map at texture(9) (glTF G=roughness, B=metallic).
+// Dead-stripped to zero cost when false.
+constant bool fc_finishMapTexture [[function_constant(16)]];
+constant bool fc_hasFinishMapTexture = is_function_constant_defined(fc_finishMapTexture)
+    ? fc_finishMapTexture : false;
+
 static inline uint mtoonEffectiveLightCount() {
     return fc_useMaterialFlags ? 3u : max(1u, min(fc_lightCount, 3u));
 }
@@ -164,7 +170,8 @@ static inline float3 mtoonStylizedSpecular(
     float3 N,
     float3 V,
     constant Uniforms& uniforms,
-    constant MToonMaterial& material,
+    float metallic,
+    float roughness,
     float3 baseColor,
     float intensity0,
     float intensity1,
@@ -172,8 +179,8 @@ static inline float3 mtoonStylizedSpecular(
     float totalIntensity,
     uint nLights
 ) {
-    float metallic = saturate(material.metallicFactor);
-    float roughness = saturate(material.roughnessFactor);
+    metallic = saturate(metallic);
+    roughness = saturate(roughness);
     float metalMask = mtoonFinishMetalMask(metallic);
     float sheenMask = saturate(metallic * 3.0) * (1.0 - metalMask);
     float metalExponent = exp2(mix(8.0, 4.0, roughness));
@@ -1216,6 +1223,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
                         texture2d<half> rimMultiplyTexture [[texture(6)]],
                         texture2d<half> uvAnimationMaskTexture [[texture(7)]],
                         texture2d<half> occlusionTexture [[texture(8)]],
+                        texture2d<half> finishMapTexture [[texture(9)]],
                         sampler textureSampler [[sampler(0)]]) {
 
  // Materialization runs first so not-yet-materialized pixels (including the
@@ -1440,7 +1448,18 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // tight metal band) and a world-space V from the camera position, which is
  // valid on every vertex path regardless of needsViewDirection.
  if (fc_hasSurfaceExtensions) {
-     bool finishOn = mtoonFinishActive(material.metallicFactor);
+     bool effectiveHasFinishMapTexture = fc_useMaterialFlags
+         ? (material.hasFinishMapTexture > 0)
+         : fc_hasFinishMapTexture;
+     float finishMetallic = saturate(material.metallicFactor);
+     float finishRoughness = saturate(material.roughnessFactor);
+     if (effectiveHasFinishMapTexture) {
+         float2 finishUV = applyUvRows(uv, material.finishMapUvRow0, material.finishMapUvRow1);
+         float4 mrSample = float4(finishMapTexture.sample(textureSampler, finishUV));
+         finishMetallic = saturate(material.metallicFactor * mrSample.b);
+         finishRoughness = saturate(material.roughnessFactor * mrSample.g);
+     }
+     bool finishOn = mtoonFinishActive(finishMetallic);
      bool hairOn = material.hairHighlightStrength > 0.0;
      if (finishOn || hairOn) {
          float3 extNormal = normalize(in.worldNormal);
@@ -1454,7 +1473,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
          float3 extView = mat_viewDir(uniforms, in.worldPosition);
          if (finishOn) {
              litColor += mtoon_float3(mtoonStylizedSpecular(
-                 extNormal, extView, uniforms, material, float3(baseColor.rgb),
+                 extNormal, extView, uniforms, finishMetallic, finishRoughness, float3(baseColor.rgb),
                  float(intensity0), float(intensity1), float(intensity2),
                  float(totalIntensity), nLights));
          }

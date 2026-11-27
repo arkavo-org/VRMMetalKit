@@ -74,6 +74,7 @@ let package = Package(
                 "Shaders/MToonShader.metal",
                 "Shaders/SkinnedShader.metal",
                 "Shaders/SpriteShader.metal",
+                "Shaders/CosmeticComposite.metal",
                 "Shaders/MToonShared.h"
             ],
             resources: [

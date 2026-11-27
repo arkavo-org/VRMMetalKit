@@ -238,6 +238,10 @@ public class VRMModel: VRMSceneContent, @unchecked Sendable {
     /// Use `VRMExpressionController` to animate expressions at runtime.
     public var expressions: VRMExpressions?
 
+    /// Face UV landmarks parsed from the `ARKAVO_vrm_cosmetics` glTF extension
+    /// (or `extras.vrmFaceLandmarks`), if authored on this avatar.
+    public var faceLandmarks: VRMFaceLandmarks?
+
     /// Spring bone physics configuration for hair, clothing, and accessories.
     ///
     /// Defines physics chains, stiffness, gravity, and colliders. Physics simulation
@@ -689,6 +693,7 @@ public class VRMModel: VRMSceneContent, @unchecked Sendable {
             "VRMC_materials_mtoon",
             "KHR_texture_transform",
             "KHR_materials_unlit",
+            VRMFaceLandmarks.extensionName,
         ]
         if let required = document.extensionsRequired {
             let unsupported = Set(required).subtracting(supportedExtensions)
@@ -717,6 +722,7 @@ public class VRMModel: VRMSceneContent, @unchecked Sendable {
         )
         model.baseURL = baseURL
         model.device = device
+        model.faceLandmarks = VRMFaceLandmarks.parse(from: document)
         
         await context?.updatePhase(.parsingVRMExtension, progress: 1.0)
         

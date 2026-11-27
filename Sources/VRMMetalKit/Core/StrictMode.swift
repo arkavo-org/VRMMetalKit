@@ -530,6 +530,10 @@ public struct ResourceIndices {
     public static let outlineWidthMultiplyTexture = 6
     /// Fragment shader: MToon UV-animation mask (linear R8).
     public static let uvAnimationMaskTexture = 7
+    /// Fragment shader: glTF ambient occlusion texture (R channel).
+    public static let occlusionTexture = 8
+    /// Fragment shader: per-pixel metallic/roughness finish map (G = roughness, B = metallic).
+    public static let finishMapTexture = 9
 
     /// Fragment shader: default sampler slot.
     public static let defaultSampler = 0
@@ -733,7 +737,7 @@ public struct MetalSizeConstants {
     /// Blocks 15 and 16 carry the opt-in hair band / crease AO and the
     /// outline minimum-width parameters; blocks 17-34 carry the per-texture
     /// `KHR_texture_transform` rows.
-    public static let mtoonMaterialSize = 560
+    public static let mtoonMaterialSize = 592
 
     /// Byte size of the Metal `Vertex` struct.
     public static let vertexSize = 44

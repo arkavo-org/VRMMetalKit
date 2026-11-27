@@ -65,6 +65,8 @@ public struct GLTFDocument: Codable {
     public let animations: [GLTFAnimation]?
     /// Raw extension dictionary (used for `VRMC_*` and other glTF extensions). Values are heterogeneous JSON.
     public let extensions: [String: Any]?
+    /// Raw root-level `extras` dictionary (application-specific metadata per glTF 2.0).
+    public let extras: [String: Any]?
     /// Names of extensions referenced anywhere in the document.
     public let extensionsUsed: [String]?
     /// Names of extensions a consumer must support to load this document.
@@ -76,7 +78,7 @@ public struct GLTFDocument: Codable {
     enum CodingKeys: String, CodingKey {
         case asset, scene, scenes, nodes, meshes, materials
         case textures, images, samplers, buffers, bufferViews
-        case accessors, skins, animations, extensions
+        case accessors, skins, animations, extensions, extras
         case extensionsUsed, extensionsRequired
     }
 
@@ -107,6 +109,14 @@ public struct GLTFDocument: Codable {
             extensions = extensionsDict?.mapValues { $0.value }
         } else {
             extensions = nil
+        }
+
+        // Decode root extras if it is a JSON object
+        if container.contains(.extras) {
+            let extrasDict = try? container.decodeIfPresent([String: AnyCodable].self, forKey: .extras)
+            extras = extrasDict?.mapValues { $0.value }
+        } else {
+            extras = nil
         }
     }
 
