@@ -155,43 +155,36 @@ final class SpringBoneUniformThreadgroupTests: XCTestCase {
         assertExactMatch(uniform, nonUniform, context: "serialized")
     }
 
+    /// Exercises the 30-step batched `warmupPhysics` path used by `VRMRenderer.loadModel(_:)`
+    /// with the default device configuration, ensuring all serial compute passes complete
+    /// cleanly (including on Simulator under Metal API Validation).
+    func testWarmupPhysicsCompletesSuccessfully() throws {
+        let boneCount = 8
+        let (model, buffers, _) = try makeChainFixture(
+            boneCount: boneCount,
+            includeCenterNode: true,
+            includeColliders: true
+        )
+        let system = try SpringBoneComputeSystem(device: device)
+        try system.populateSpringBoneData(model: model)
+
+        system.warmupPhysics(model: model, steps: 30)
+
+        let prevBuffer = try XCTUnwrap(buffers.bonePosPrev)
+        let prevPointer = prevBuffer.contents().bindMemory(to: SIMD3<Float>.self, capacity: boneCount)
+        let curr = SpringBoneTestFixtures.readBonePositions(model: model)
+        let prev = Array(UnsafeBufferPointer(start: prevPointer, count: boneCount))
+        assertFinitePositions((curr, prev), expectedCount: boneCount)
+        XCTAssertEqual(curr, prev, "Warmup should settle bones with zero residual velocity")
+    }
+
     // MARK: - Helpers
 
-    private func assertFinitePositions(
-        _ result: (curr: [SIMD3<Float>], prev: [SIMD3<Float>]),
-        expectedCount: Int
-    ) {
-        XCTAssertEqual(result.curr.count, expectedCount)
-        XCTAssertEqual(result.prev.count, expectedCount)
-        for bone in 0..<expectedCount {
-            XCTAssertTrue(result.curr[bone].x.isFinite && result.curr[bone].y.isFinite && result.curr[bone].z.isFinite,
-                          "bonePosCurr[\(bone)] is non-finite: \(result.curr[bone])")
-            XCTAssertTrue(result.prev[bone].x.isFinite && result.prev[bone].y.isFinite && result.prev[bone].z.isFinite,
-                          "bonePosPrev[\(bone)] is non-finite: \(result.prev[bone])")
-        }
-    }
-
-    private func assertExactMatch(
-        _ uniform: (curr: [SIMD3<Float>], prev: [SIMD3<Float>]),
-        _ nonUniform: (curr: [SIMD3<Float>], prev: [SIMD3<Float>]),
-        context: String
-    ) {
-        XCTAssertEqual(uniform.curr.count, nonUniform.curr.count)
-        for bone in uniform.curr.indices {
-            XCTAssertEqual(uniform.curr[bone], nonUniform.curr[bone],
-                           "\(context) bonePosCurr[\(bone)] differed between uniform and non-uniform dispatch")
-            XCTAssertEqual(uniform.prev[bone], nonUniform.prev[bone],
-                           "\(context) bonePosPrev[\(bone)] differed between uniform and non-uniform dispatch")
-        }
-    }
-
-    private func simulateChain(
+    private func makeChainFixture(
         boneCount: Int,
-        supportsNonUniform: Bool,
         includeCenterNode: Bool,
-        includeColliders: Bool,
-        serialized: Bool
-    ) throws -> (curr: [SIMD3<Float>], prev: [SIMD3<Float>]) {
+        includeColliders: Bool
+    ) throws -> (model: VRMModel, buffers: SpringBoneBuffers, centerNodeIndex: Int?) {
         let model = try SpringBoneTestFixtures.makeVerticalChain(
             device: device,
             boneCount: boneCount,
@@ -255,6 +248,50 @@ final class SpringBoneUniformThreadgroupTests: XCTestCase {
             numSpheres: includeColliders ? 1 : 0,
             numCapsules: includeColliders ? 1 : 0,
             numPlanes: includeColliders ? 1 : 0
+        )
+
+        return (model, buffers, centerNodeIndex)
+    }
+
+    private func assertFinitePositions(
+        _ result: (curr: [SIMD3<Float>], prev: [SIMD3<Float>]),
+        expectedCount: Int
+    ) {
+        XCTAssertEqual(result.curr.count, expectedCount)
+        XCTAssertEqual(result.prev.count, expectedCount)
+        for bone in 0..<expectedCount {
+            XCTAssertTrue(result.curr[bone].x.isFinite && result.curr[bone].y.isFinite && result.curr[bone].z.isFinite,
+                          "bonePosCurr[\(bone)] is non-finite: \(result.curr[bone])")
+            XCTAssertTrue(result.prev[bone].x.isFinite && result.prev[bone].y.isFinite && result.prev[bone].z.isFinite,
+                          "bonePosPrev[\(bone)] is non-finite: \(result.prev[bone])")
+        }
+    }
+
+    private func assertExactMatch(
+        _ uniform: (curr: [SIMD3<Float>], prev: [SIMD3<Float>]),
+        _ nonUniform: (curr: [SIMD3<Float>], prev: [SIMD3<Float>]),
+        context: String
+    ) {
+        XCTAssertEqual(uniform.curr.count, nonUniform.curr.count)
+        for bone in uniform.curr.indices {
+            XCTAssertEqual(uniform.curr[bone], nonUniform.curr[bone],
+                           "\(context) bonePosCurr[\(bone)] differed between uniform and non-uniform dispatch")
+            XCTAssertEqual(uniform.prev[bone], nonUniform.prev[bone],
+                           "\(context) bonePosPrev[\(bone)] differed between uniform and non-uniform dispatch")
+        }
+    }
+
+    private func simulateChain(
+        boneCount: Int,
+        supportsNonUniform: Bool,
+        includeCenterNode: Bool,
+        includeColliders: Bool,
+        serialized: Bool
+    ) throws -> (curr: [SIMD3<Float>], prev: [SIMD3<Float>]) {
+        let (model, buffers, centerNodeIndex) = try makeChainFixture(
+            boneCount: boneCount,
+            includeCenterNode: includeCenterNode,
+            includeColliders: includeColliders
         )
 
         let system = try SpringBoneComputeSystem(

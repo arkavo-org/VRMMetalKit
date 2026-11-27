@@ -159,6 +159,14 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         return (raw + Self.kMetalBufferOffsetAlignment - 1) & ~(Self.kMetalBufferOffsetAlignment - 1)
     }
 
+    /// Stride in bytes for each substep slot of `centerDeltaBuffer`. The kernel
+    /// binds it as `constant CenterDeltaRecord*`, so each slot must start on a
+    /// 256-byte boundary.
+    private var centerDeltaSubstepStride: Int {
+        let raw = MemoryLayout<CenterDeltaRecordGPU>.stride * centerSpringRecords.count
+        return (raw + Self.kMetalBufferOffsetAlignment - 1) & ~(Self.kMetalBufferOffsetAlignment - 1)
+    }
+
     // World bind direction interpolation (prevents rotational explosions during fast turns)
     /// Internal (not private) so tests can recompute the expected per-substep
     /// interpolation and check it against the slot the GPU actually read.
@@ -1074,7 +1082,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         let gridSize = MTLSize(width: numBones, height: 1, depth: 1)
         let useNonUniform = supportsNonUniformThreadgroups
 
-        // Create compute encoder
+        // Create serial compute encoder; MTLDispatchType.serial orders dispatches
+        // and maintains buffer visibility across tracked resources without memoryBarrier.
         guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
             return
         }
@@ -1149,7 +1158,6 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             computeEncoder.setBuffer(animatedRootPositionsPrevBuffer, offset: 0, index: 12)
             let rootGridSize = MTLSize(width: rootBoneIndices.count, height: 1, depth: 1)
             dispatch(rootGridSize)
-            computeEncoder.memoryBarrier(scope: .buffers)
         }
 
         // VRMC_springBone-1.0 §5.1 center-frame rigid follow (VMK#295):
@@ -1163,22 +1171,19 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
            let centerDeltaPipeline = centerDeltaPipeline,
            let centerDeltaBuffer = centerDeltaBuffer {
             let recordCount = centerSpringRecords.count
-            let recordStride = MemoryLayout<CenterDeltaRecordGPU>.stride
-            let substepByteOffset = substepIndex * recordCount * recordStride
+            let substepByteOffset = substepIndex * centerDeltaSubstepStride
             computeEncoder.setComputePipelineState(centerDeltaPipeline)
             computeEncoder.setBuffer(centerDeltaBuffer, offset: substepByteOffset, index: 13)
             var numRecordsU32 = UInt32(recordCount)
             computeEncoder.setBytes(&numRecordsU32, length: MemoryLayout<UInt32>.size, index: 14)
             let recordGridSize = MTLSize(width: recordCount, height: 1, depth: 1)
             dispatch(recordGridSize)
-            computeEncoder.memoryBarrier(scope: .buffers)
         }
 
         let serializeBones = testSerializeBoneDispatches
         let dispatchBones = { [boneChainIndexBuffer, chainSleepBuffer] in
             guard serializeBones else {
                 dispatch(gridSize)
-                computeEncoder.memoryBarrier(scope: .buffers)
                 return
             }
             var boneAsOwnChain = (0..<numBones).map { UInt32($0) }
@@ -1188,7 +1193,6 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 asleep[bone] = 0
                 computeEncoder.setBytes(&asleep, length: numBones * MemoryLayout<UInt32>.stride, index: 17)
                 dispatch(gridSize)
-                computeEncoder.memoryBarrier(scope: .buffers)
             }
             computeEncoder.setBuffer(boneChainIndexBuffer, offset: 0, index: 16)
             computeEncoder.setBuffer(chainSleepBuffer, offset: 0, index: 17)
@@ -1200,7 +1204,6 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         let copyParentPositions = {
             computeEncoder.setComputePipelineState(copyParentPositionsPipeline)
             dispatch(gridSize)
-            computeEncoder.memoryBarrier(scope: .buffers)
         }
 
         // Execute predict kernel (step 1: predict new tip position)
@@ -2430,8 +2433,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         let numRecords = centerSpringRecords.count
         if numRecords > 0 {
             let maxSubsteps = VRMConstants.Physics.maxSubstepsPerFrame
-            let stride = MemoryLayout<CenterDeltaRecordGPU>.stride
-            let totalBytes = stride * numRecords * maxSubsteps
+            let totalBytes = centerDeltaSubstepStride * maxSubsteps
             centerDeltaBuffer = device.makeBuffer(length: totalBytes, options: [.storageModeShared])
             centerDeltaBuffer?.label = "SpringBone CenterDelta"
             if let buffer = centerDeltaBuffer {
@@ -3473,10 +3475,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     }
 
     /// Pre-computes every substep's incremental center-frame delta and
-    /// packs them into `centerDeltaBuffer` for the GPU kernel. Layout is
-    /// `[substep0_record0, substep0_record1, ..., substepN_recordM]`;
-    /// each substep's slice has byte offset
-    /// `substepIndex × numRecords × stride`.
+    /// packs them into `centerDeltaBuffer` for the GPU kernel. Each substep's
+    /// slice starts at `substepIndex × centerDeltaSubstepStride` (256-byte
+    /// aligned for the kernel's `constant` address-space binding).
     ///
     /// Per-substep delta: linearly interpolate `prev → target` to get
     /// the center's pose at `tPrev = i/N` and `tCurr = (i+1)/N`, then
@@ -3495,14 +3496,15 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         guard !centerSpringRecords.isEmpty,
               let buffer = centerDeltaBuffer else { return }
 
-        let stride = MemoryLayout<CenterDeltaRecordGPU>.stride
         let numRecords = centerSpringRecords.count
-        let ptr = buffer.contents().bindMemory(
-            to: CenterDeltaRecordGPU.self,
-            capacity: numRecords * VRMConstants.Physics.maxSubstepsPerFrame
-        )
+        let slotStride = centerDeltaSubstepStride
+        let basePtr = buffer.contents()
 
         for s in 0..<substepCount {
+            let slotPtr = basePtr.advanced(by: s * slotStride).bindMemory(
+                to: CenterDeltaRecordGPU.self,
+                capacity: numRecords
+            )
             let tPrev = Float(s) / Float(substepCount)
             let tCurr = Float(s + 1) / Float(substepCount)
             centerDeltaScratch.removeAll(keepingCapacity: true)
@@ -3528,15 +3530,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 } else {
                     delta = matrix_identity_float4x4
                 }
-                let slot = s * numRecords + i
-                ptr[slot] = CenterDeltaRecordGPU(
+                slotPtr[i] = CenterDeltaRecordGPU(
                     boneStart: UInt32(record.boneStart),
                     boneCount: UInt32(record.boneCount),
                     delta: delta
                 )
             }
         }
-        _ = stride  // silence unused if optimizer drops it
     }
 
     /// Component-wise linear interpolation of two 4×4 matrices. Exact
