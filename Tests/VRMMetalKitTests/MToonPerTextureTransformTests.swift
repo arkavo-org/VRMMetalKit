@@ -202,11 +202,11 @@ final class MToonPerTextureTransformTests: XCTestCase {
 
     private func shadeFrame(shadeTransform: GLTFKHRTextureTransform?) async throws -> [UInt8] {
         let model = try await SwatchScene.load(.rigid, device: device)
-        model.textures.append(try quadrantTexture(name: "shade"))
-        let shadeIndex = model.textures.count - 1
+        let shadeTex = try quadrantTexture(name: "shade")
+        model.textures.append(shadeTex)
         let sphere = model.materials[1]
         sphere.mtoon?.shadeColorFactor = [1, 1, 1]
-        sphere.mtoon?.shadeMultiplyTexture = shadeIndex
+        sphere.mtoon?.shadeMultiplyTexture = shadeTex
         sphere.mtoon?.shadeMultiplyTextureTransform = shadeTransform
         sphere.mtoon?.outlineWidthMode = .none
         return try SwatchScene.render(model, device: device)
@@ -219,7 +219,7 @@ final class MToonPerTextureTransformTests: XCTestCase {
         let sphere = model.materials[1]
         sphere.baseColorTexture = shared
         sphere.mtoon?.shadeColorFactor = [1, 1, 1]
-        sphere.mtoon?.shadeMultiplyTexture = model.textures.count - 1
+        sphere.mtoon?.shadeMultiplyTexture = shared
         sphere.mtoon?.shadeMultiplyTextureTransform = shadeTransform
         sphere.mtoon?.outlineWidthMode = .none
         return try SwatchScene.render(model, device: device)

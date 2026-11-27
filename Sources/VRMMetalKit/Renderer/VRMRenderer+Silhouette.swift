@@ -117,7 +117,6 @@ extension VRMRenderer {
     /// undo each step manually (see comments below).
     ///
     /// Effects on the renderer:
-    /// - `disableAutoMaterialOverrides = true`
     /// - `additiveDirectionalRimEnabled = true`
     /// - `additiveDirectionalRimPower = config.rimFresnelPower`
     /// - `config.hairHighlight` disabled (its band would light the crushed body)
@@ -141,7 +140,6 @@ extension VRMRenderer {
     public func applySilhouetteMode(model: VRMModel,
                                     config: SilhouetteRenderConfig = SilhouetteRenderConfig()) {
         // Renderer flags
-        self.disableAutoMaterialOverrides = true
         self.additiveDirectionalRimEnabled = true
         self.additiveDirectionalRimPower = config.rimFresnelPower
         self.config.hairHighlight.isEnabled = false
@@ -156,25 +154,28 @@ extension VRMRenderer {
         self.setAmbientColor(SIMD3<Float>(0, 0, 0))
 
         // Material overrides
-        for material in model.materials {
-            // 1. Kill MToon's inverted-hull outline on every material —
-            //    independent of base color, so it survives the crush below
-            //    and would otherwise pop as bright artifacts.
-            if var mtoon = material.mtoon {
-                mtoon.outlineWidthMode = .none
-                mtoon.outlineWidthFactor = 0
-                mtoon.outlineColorFactor = SIMD3<Float>(0, 0, 0)
-                mtoon.outlineLightingMixFactor = 0
-                material.mtoon = mtoon
-            }
+        model.edit { editor in
+            for material in editor.model.materials {
+                // 1. Kill MToon's inverted-hull outline on every material —
+                //    independent of base color, so it survives the crush below
+                //    and would otherwise pop as bright artifacts.
+                if var mtoon = material.mtoon {
+                    mtoon.outlineWidthMode = .none
+                    mtoon.outlineWidthFactor = 0
+                    mtoon.outlineColorFactor = SIMD3<Float>(0, 0, 0)
+                    mtoon.outlineLightingMixFactor = 0
+                    material.mtoon = mtoon
+                }
 
-            material.metallicFactor = 0
+                material.metallicFactor = 0
 
-            if config.isEyeMaterial(material.name) {
-                applyEyeOverride(to: material, config: config)
-            } else {
-                applyBlackBodyOverride(to: material)
+                if config.isEyeMaterial(material.name) {
+                    applyEyeOverride(to: material, config: config)
+                } else {
+                    applyBlackBodyOverride(to: material)
+                }
             }
+            editor.markMaterialsModified()
         }
     }
 

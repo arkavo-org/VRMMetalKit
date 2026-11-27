@@ -119,15 +119,12 @@ final class MaterialDiagnosticTests: XCTestCase {
         
         for (index, material) in model.materials.enumerated() {
             guard let mtoon = material.mtoon,
-                  let shadeTexIndex = mtoon.shadeMultiplyTexture,
-                  shadeTexIndex < model.textures.count else {
+                  let texture = mtoon.shadeMultiplyTexture else {
                 print("Material \(index): \(material.name ?? "unnamed") - No shade multiply texture")
                 continue
             }
             
-            let texture = model.textures[shadeTexIndex]
             print("Material \(index): \(material.name ?? "unnamed")")
-            print("  - Texture Index: \(shadeTexIndex)")
             print("  - Texture Name: \(texture.name ?? "unnamed")")
             
             if let mtlTexture = texture.mtlTexture {

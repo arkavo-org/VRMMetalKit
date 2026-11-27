@@ -107,9 +107,12 @@ public class VRMMorphTargetSystem {
     private var activeSetBuffer: MTLBuffer?
     private var lastActiveSetWeights: [Float]?
 
-    // Morphed output buffers (per primitive)
-    private var morphedPositionBuffers: [Int: MTLBuffer] = [:] // primitiveID -> buffer
-    private var morphedNormalBuffers: [Int: MTLBuffer] = [:]   // Phase B
+    // Morphed output buffers (per primitive, keyed by ObjectIdentifier)
+    private var morphedPositionBuffers: [ObjectIdentifier: MTLBuffer] = [:]
+    private var morphedNormalBuffers: [ObjectIdentifier: MTLBuffer] = [:]
+
+    internal var cachedPositionBufferCount: Int { morphedPositionBuffers.count }
+    internal var cachedNormalBufferCount: Int { morphedNormalBuffers.count }
 
     /// The precompiled `morph_accumulate_positions` compute pipeline state used by ``applyMorphsCompute(basePositions:deltaPositions:outputPositions:vertexCount:morphCount:commandBuffer:)``.
     public var morphAccumulatePipelineState: MTLComputePipelineState?
@@ -344,32 +347,49 @@ public class VRMMorphTargetSystem {
         return !activeSet.isEmpty
     }
 
-    /// Returns (allocating on first request) a private-storage `MTLBuffer` sized to hold `vertexCount` SIMD3<Float> positions for the given primitive.
-    public func getOrCreateMorphedPositionBuffer(primitiveID: Int, vertexCount: Int) -> MTLBuffer? {
-        if let buffer = morphedPositionBuffers[primitiveID] {
+    /// Returns (allocating on first request or growing if undersized) a private-storage `MTLBuffer`
+    /// sized to hold `vertexCount` `SIMD3<Float>` positions for `primitive`.
+    public func getOrCreateMorphedPositionBuffer(for primitive: VRMPrimitive, vertexCount: Int) -> MTLBuffer? {
+        let key = ObjectIdentifier(primitive)
+        let requiredSize = vertexCount * MemoryLayout<SIMD3<Float>>.stride
+        guard requiredSize > 0 else { return nil }
+        if let buffer = morphedPositionBuffers[key], buffer.length >= requiredSize {
             return buffer
         }
 
-        // Create new buffer for morphed positions
-        let bufferSize = vertexCount * MemoryLayout<SIMD3<Float>>.stride
-        let buffer = device.makeBuffer(length: bufferSize, options: .storageModePrivate)
-        buffer?.label = "Morph Output Positions (prim \(primitiveID))"
-        morphedPositionBuffers[primitiveID] = buffer
+        let buffer = device.makeBuffer(length: requiredSize, options: .storageModePrivate)
+        buffer?.label = "Morph Output Positions (\(key))"
+        morphedPositionBuffers[key] = buffer
         return buffer
     }
 
-    /// Returns (allocating on first request) a private-storage `MTLBuffer` sized to hold `vertexCount` SIMD3<Float> normals for the given primitive.
-    public func getOrCreateMorphedNormalBuffer(primitiveID: Int, vertexCount: Int) -> MTLBuffer? {
-        if let buffer = morphedNormalBuffers[primitiveID] {
+    /// Returns (allocating on first request or growing if undersized) a private-storage `MTLBuffer`
+    /// sized to hold `vertexCount` `SIMD3<Float>` normals for `primitive`.
+    public func getOrCreateMorphedNormalBuffer(for primitive: VRMPrimitive, vertexCount: Int) -> MTLBuffer? {
+        let key = ObjectIdentifier(primitive)
+        let requiredSize = vertexCount * MemoryLayout<SIMD3<Float>>.stride
+        guard requiredSize > 0 else { return nil }
+        if let buffer = morphedNormalBuffers[key], buffer.length >= requiredSize {
             return buffer
         }
 
-        // Create new buffer for morphed normals
-        let bufferSize = vertexCount * MemoryLayout<SIMD3<Float>>.stride
-        let buffer = device.makeBuffer(length: bufferSize, options: .storageModePrivate)
-        buffer?.label = "Morph Output Normals (prim \(primitiveID))"
-        morphedNormalBuffers[primitiveID] = buffer
+        let buffer = device.makeBuffer(length: requiredSize, options: .storageModePrivate)
+        buffer?.label = "Morph Output Normals (\(key))"
+        morphedNormalBuffers[key] = buffer
         return buffer
+    }
+
+    /// Evicts any cached morphed position and normal output buffers for `primitive`.
+    public func evictPrimitive(_ primitive: VRMPrimitive) {
+        let key = ObjectIdentifier(primitive)
+        morphedPositionBuffers.removeValue(forKey: key)
+        morphedNormalBuffers.removeValue(forKey: key)
+    }
+
+    /// Drops cached morphed output buffers for primitives not in `livePrimitives`.
+    public func prune(keeping livePrimitives: Set<ObjectIdentifier>) {
+        morphedPositionBuffers = morphedPositionBuffers.filter { livePrimitives.contains($0.key) }
+        morphedNormalBuffers = morphedNormalBuffers.filter { livePrimitives.contains($0.key) }
     }
 
     // MARK: - SoA Morph Accumulation with Active Set
@@ -643,7 +663,7 @@ public class VRMExpressionController: @unchecked Sendable {
 
     // MARK: - Material Color Base Values
 
-    /// Sets the base material color for a material. Called during model setup.
+    /// Sets the base material color for a material. Called during model setup or runtime tint updates.
     /// The renderer calls this for each material's color properties so the expression
     /// controller knows the original values to blend from.
     public func setBaseMaterialColor(materialIndex: Int, type: VRMMaterialColorType, color: SIMD4<Float>) {
@@ -651,6 +671,37 @@ public class VRMExpressionController: @unchecked Sendable {
             baseMaterialColors[materialIndex] = [:]
         }
         baseMaterialColors[materialIndex]?[type] = color
+        weightsDirty = true
+    }
+
+    /// Refreshes all stored base material colors for a single material from its live
+    /// properties and eagerly recomputes any active expression color overrides.
+    public func refreshBaseMaterialColor(materialIndex: Int, from material: VRMMaterial) {
+        setBaseMaterialColor(materialIndex: materialIndex, type: .color, color: material.baseColorFactor)
+        setBaseMaterialColor(materialIndex: materialIndex, type: .emissionColor, color: SIMD4<Float>(material.emissiveFactor, 1.0))
+        if let mtoon = material.mtoon {
+            setBaseMaterialColor(materialIndex: materialIndex, type: .shadeColor, color: SIMD4<Float>(mtoon.shadeColorFactor, 1.0))
+            setBaseMaterialColor(materialIndex: materialIndex, type: .matcapColor, color: SIMD4<Float>(mtoon.matcapFactor, 1.0))
+            setBaseMaterialColor(materialIndex: materialIndex, type: .rimColor, color: SIMD4<Float>(mtoon.parametricRimColorFactor, 1.0))
+            setBaseMaterialColor(materialIndex: materialIndex, type: .outlineColor, color: SIMD4<Float>(mtoon.outlineColorFactor, 1.0))
+        }
+        ensureWeightsUpdated()
+    }
+
+    /// Refreshes all stored base material colors from `model.materials` and
+    /// eagerly recomputes any active expression color overrides.
+    public func refreshBaseMaterialColors(from model: VRMModel) {
+        for (materialIndex, material) in model.materials.enumerated() {
+            setBaseMaterialColor(materialIndex: materialIndex, type: .color, color: material.baseColorFactor)
+            setBaseMaterialColor(materialIndex: materialIndex, type: .emissionColor, color: SIMD4<Float>(material.emissiveFactor, 1.0))
+            if let mtoon = material.mtoon {
+                setBaseMaterialColor(materialIndex: materialIndex, type: .shadeColor, color: SIMD4<Float>(mtoon.shadeColorFactor, 1.0))
+                setBaseMaterialColor(materialIndex: materialIndex, type: .matcapColor, color: SIMD4<Float>(mtoon.matcapFactor, 1.0))
+                setBaseMaterialColor(materialIndex: materialIndex, type: .rimColor, color: SIMD4<Float>(mtoon.parametricRimColorFactor, 1.0))
+                setBaseMaterialColor(materialIndex: materialIndex, type: .outlineColor, color: SIMD4<Float>(mtoon.outlineColorFactor, 1.0))
+            }
+        }
+        ensureWeightsUpdated()
     }
 
     /// Gets the material color override for rendering, if any expression is active that affects it.
@@ -826,8 +877,8 @@ public class VRMExpressionController: @unchecked Sendable {
         // Note: Renderer will push per-primitive weights; no global push here
     }
 
-    /// Recomputes per-mesh weights only when expression weights have changed since the last read.
-    private func ensureWeightsUpdated() {
+    /// Recomputes per-mesh weights only when expression weights or base material colors have changed since the last read.
+    internal func ensureWeightsUpdated() {
         guard weightsDirty else { return }
         updateMorphTargets()
         weightsDirty = false

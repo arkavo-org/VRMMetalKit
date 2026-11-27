@@ -115,10 +115,10 @@ final class Group2TransformSkinningTests: XCTestCase {
         let system = VRMSkinningSystem(device: device)
         system.setupForSkins([skin])
         system.markSkinsDirtyIfJointsMoved([skin])
-        system.clearSkinDirty(skinIndex: 0)
+        system.clearSkinDirty(for: skin)
 
         system.markSkinsDirtyIfJointsMoved([skin])
-        XCTAssertFalse(system.isSkinDirty(skinIndex: 0),
+        XCTAssertFalse(system.isSkinDirty(for: skin),
                        "static joints must not force a palette rebuild")
     }
 
@@ -133,16 +133,16 @@ final class Group2TransformSkinningTests: XCTestCase {
         let system = VRMSkinningSystem(device: device)
         system.setupForSkins([skinA, skinB])
         system.markSkinsDirtyIfJointsMoved([skinA, skinB])
-        system.clearSkinDirty(skinIndex: 0)
-        system.clearSkinDirty(skinIndex: 1)
+        system.clearSkinDirty(for: skinA)
+        system.clearSkinDirty(for: skinB)
 
         jointA.translation = SIMD3<Float>(0.4, 0, 0)
         jointA.updateWorldTransform()
 
         system.markSkinsDirtyIfJointsMoved([skinA, skinB])
-        XCTAssertTrue(system.isSkinDirty(skinIndex: 0),
+        XCTAssertTrue(system.isSkinDirty(for: skinA),
                       "the skin whose joint moved must rebuild")
-        XCTAssertFalse(system.isSkinDirty(skinIndex: 1),
+        XCTAssertFalse(system.isSkinDirty(for: skinB),
                        "an unrelated skin must stay clean")
     }
 
@@ -154,7 +154,7 @@ final class Group2TransformSkinningTests: XCTestCase {
         system.setupForSkins([skin])
 
         system.markSkinsDirtyIfJointsMoved([skin])
-        system.updateJointMatrices(for: skin, skinIndex: 0)
+        system.updateJointMatrices(for: skin)
 
         guard let buffer = system.getJointMatricesBuffer() else {
             return XCTFail("expected joint buffer")
@@ -164,7 +164,7 @@ final class Group2TransformSkinningTests: XCTestCase {
         pointer[0] = sentinel
 
         system.markSkinsDirtyIfJointsMoved([skin])
-        system.updateJointMatrices(for: skin, skinIndex: 0)
+        system.updateJointMatrices(for: skin)
 
         XCTAssertEqual(pointer[0].columns.0.x, 9, accuracy: 1e-6,
                        "static joints must not rewrite the palette")

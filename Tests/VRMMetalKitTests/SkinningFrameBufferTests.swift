@@ -30,7 +30,7 @@ final class SkinningFrameBufferTests: XCTestCase {
             joint.translation = SIMD3<Float>(Float(slot + 1), 0, 0)
             joint.updateWorldTransform()
             system.markSkinsDirtyIfJointsMoved([skin])
-            system.updateJointMatrices(for: skin, skinIndex: 0)
+            system.updateJointMatrices(for: skin)
             let palette = try XCTUnwrap(system.getJointMatricesBuffer())
             let output = try XCTUnwrap(device.makeBuffer(length: MemoryLayout<float4x4>.stride))
             let cb = try XCTUnwrap(queue.makeCommandBuffer())
@@ -56,7 +56,7 @@ final class SkinningFrameBufferTests: XCTestCase {
             joint.translation = SIMD3<Float>(Float(slot + 1), 0, 0)
             joint.updateWorldTransform()
             system.markSkinsDirtyIfJointsMoved([skin])
-            system.updateJointMatrices(for: skin, skinIndex: 0)
+            system.updateJointMatrices(for: skin)
         }
         let lastPose = Float(VRMConstants.Rendering.maxBufferedFrames)
         // No further world-generation changes: every reused slot must acquire
@@ -64,8 +64,8 @@ final class SkinningFrameBufferTests: XCTestCase {
         for slot in 0..<VRMConstants.Rendering.maxBufferedFrames {
             system.beginFrame(bufferIndex: slot)
             system.markSkinsDirtyIfJointsMoved([skin])
-            XCTAssertFalse(system.isSkinDirty(skinIndex: 0))
-            system.updateJointMatrices(for: skin, skinIndex: 0)
+            XCTAssertFalse(system.isSkinDirty(for: skin))
+            system.updateJointMatrices(for: skin)
             let palette = try XCTUnwrap(system.getJointMatricesBuffer())
             XCTAssertEqual(palette.contents().load(as: float4x4.self).columns.3.x, lastPose)
         }
@@ -75,18 +75,18 @@ final class SkinningFrameBufferTests: XCTestCase {
         let (_, system, skin, joint) = try fixture()
         joint.translation = SIMD3<Float>(4, 0, 0)
         joint.updateWorldTransform()
-        system.updateJointMatrices(for: skin, skinIndex: 0)
+        system.updateJointMatrices(for: skin)
         system.testIdentityPalette = 0
         system.beginFrame(bufferIndex: 1)
-        system.updateJointMatrices(for: skin, skinIndex: 0)
+        system.updateJointMatrices(for: skin)
         XCTAssertEqual(try XCTUnwrap(system.getJointMatricesBuffer()).contents().load(as: float4x4.self),
                        matrix_identity_float4x4)
         system.testIdentityPalette = nil
         system.beginFrame(bufferIndex: 2)
-        system.updateJointMatrices(for: skin, skinIndex: 0)
+        system.updateJointMatrices(for: skin)
         XCTAssertEqual(try XCTUnwrap(system.getJointMatricesBuffer()).contents().load(as: float4x4.self).columns.3.x, 4)
         system.beginFrame(bufferIndex: 1)
-        system.updateJointMatrices(for: skin, skinIndex: 0)
+        system.updateJointMatrices(for: skin)
         XCTAssertEqual(try XCTUnwrap(system.getJointMatricesBuffer()).contents().load(as: float4x4.self).columns.3.x, 4)
     }
 }

@@ -92,10 +92,13 @@ struct ContactShadowFootprint: Equatable {
     }
 }
 
-/// One mesh-bearing node's bind-space bounds and the node whose world matrix
-/// places them (the node itself for rigid meshes, its scene root for skinned).
+/// One primitive's bind-space bounds, its owning node/primitive (for live
+/// `isHidden` evaluation), and the node whose world matrix places it (the
+/// node itself for rigid meshes, its scene root for skinned).
 struct ContactShadowMeshEntry {
-    var transformNode: Int
+    var node: VRMNode
+    var primitive: VRMPrimitive
+    var transformNode: VRMNode
     var localMin: SIMD3<Float>
     var localMax: SIMD3<Float>
 }

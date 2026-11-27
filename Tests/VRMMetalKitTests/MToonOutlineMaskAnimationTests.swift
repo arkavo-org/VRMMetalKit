@@ -63,22 +63,23 @@ final class MToonOutlineMaskAnimationTests: XCTestCase {
     ) async throws -> [Bool] {
         let model = try await SwatchScene.load(fixture, device: device)
         let widthMask = try texture(width: 2, pixels: [0, 0, 0, 255, 255, 255, 255, 255])
-        model.textures.append(VRMTexture(name: "outlineWidthMask", mtlTexture: widthMask))
-        let widthMaskIndex = model.textures.count - 1
-        var animationMaskIndex: Int?
+        let widthMaskTex = VRMTexture(name: "outlineWidthMask", mtlTexture: widthMask)
+        model.textures.append(widthMaskTex)
+        var animationMaskTex: VRMTexture?
         if let animationMaskB {
             let mask = try texture(width: 1, pixels: [255, 255, animationMaskB, 255])
-            model.textures.append(VRMTexture(name: "uvAnimationMask", mtlTexture: mask))
-            animationMaskIndex = model.textures.count - 1
+            let vrmMask = VRMTexture(name: "uvAnimationMask", mtlTexture: mask)
+            model.textures.append(vrmMask)
+            animationMaskTex = vrmMask
         }
         for material in model.materials {
             material.doubleSided = doubleSided
             if var mtoon = material.mtoon {
                 mtoon.outlineWidthMode = .worldCoordinates
                 mtoon.outlineWidthFactor = 0.05
-                mtoon.outlineWidthMultiplyTexture = widthMaskIndex
+                mtoon.outlineWidthMultiplyTexture = widthMaskTex
                 mtoon.uvAnimationScrollXSpeedFactor = 0.5
-                if let animationMaskIndex { mtoon.uvAnimationMaskTexture = animationMaskIndex }
+                if let animationMaskTex { mtoon.uvAnimationMaskTexture = animationMaskTex }
                 material.mtoon = mtoon
             }
         }

@@ -88,8 +88,8 @@ final class JointPaletteBoundsTests: XCTestCase {
         let system = VRMSkinningSystem(device: device)
         let skins = [makeSkin(name: "a", jointCount: 5), makeSkin(name: "b", jointCount: 7)]
         system.setupForSkins(skins)
-        for (index, skin) in skins.enumerated() {
-            system.updateJointMatrices(for: skin, skinIndex: index)
+        for skin in skins {
+            system.updateJointMatrices(for: skin)
         }
 
         let buffer = try XCTUnwrap(system.getJointMatricesBuffer())

@@ -500,8 +500,13 @@ public struct VRM0MaterialProperty {
     /// remap, outline-width cm→normalized scaling, and the Y-axis flip for
     /// UV-animation scroll. `_IndirectLightIntensity` is deliberately dropped
     /// (semantics differ from MToon 1.0 `giEqualizationFactor`).
-    public func toMToonMaterial() -> VRMMToonMaterial {
+    ///
+    /// - Parameter textures: Loaded model textures used to resolve VRM 0.x texture indices into direct ``VRMTexture`` references.
+    public func toMToonMaterial(textures: [VRMTexture] = []) -> VRMMToonMaterial {
         var mtoon = VRMMToonMaterial()
+        let resolveTexture: (Int) -> VRMTexture? = { index in
+            (index >= 0 && index < textures.count) ? textures[index] : nil
+        }
 
         // Shade color from _ShadeColor vector property (sRGB to Linear conversion)
         if let shadeColor = vectorProperties["_ShadeColor"], shadeColor.count >= 3 {
@@ -536,7 +541,7 @@ public struct VRM0MaterialProperty {
         // using the bare factor (typically `[1,1,1]` white), washing out
         // dark-textured materials like hair.
         if let shadeTexIndex = textureProperties["_ShadeTexture"] {
-            mtoon.shadeMultiplyTexture = shadeTexIndex
+            mtoon.shadeMultiplyTexture = resolveTexture(shadeTexIndex)
         }
 
         // VRM 0.x's `_IndirectLightIntensity` is an intensity scalar, semantically
@@ -551,7 +556,7 @@ public struct VRM0MaterialProperty {
 
         // Matcap/Sphere Add texture
         if let matcapIndex = textureProperties["_SphereAdd"] {
-            mtoon.matcapTexture = matcapIndex
+            mtoon.matcapTexture = resolveTexture(matcapIndex)
             mtoon.matcapFactor = SIMD3<Float>(1.0, 1.0, 1.0)  // White when texture exists
         }
 
@@ -564,7 +569,7 @@ public struct VRM0MaterialProperty {
             )
         }
         if let rimTexIndex = textureProperties["_RimTexture"] {
-            mtoon.rimMultiplyTexture = rimTexIndex
+            mtoon.rimMultiplyTexture = resolveTexture(rimTexIndex)
         }
         if let rimPower = floatProperties["_RimFresnelPower"] {
             mtoon.parametricRimFresnelPowerFactor = rimPower
@@ -581,7 +586,7 @@ public struct VRM0MaterialProperty {
             mtoon.outlineWidthFactor = outlineWidth * 0.01  // cm to normalized units
         }
         if let outlineTexIndex = textureProperties["_OutlineWidthTexture"] {
-            mtoon.outlineWidthMultiplyTexture = outlineTexIndex
+            mtoon.outlineWidthMultiplyTexture = resolveTexture(outlineTexIndex)
         }
         if let outlineMode = floatProperties["_OutlineWidthMode"] {
             switch Int(outlineMode) {
@@ -608,7 +613,7 @@ public struct VRM0MaterialProperty {
 
         // UV Animation (note: Y scroll is negated for V0->V1 conversion)
         if let uvMaskIndex = textureProperties["_UvAnimMaskTexture"] {
-            mtoon.uvAnimationMaskTexture = uvMaskIndex
+            mtoon.uvAnimationMaskTexture = resolveTexture(uvMaskIndex)
         }
         if let uvScrollX = floatProperties["_UvAnimScrollX"] {
             mtoon.uvAnimationScrollXSpeedFactor = uvScrollX
@@ -628,15 +633,15 @@ public struct VRM0MaterialProperty {
 
 /// MToon 1.0 non-photorealistic material parameters as defined by the `VRMC_materials_mtoon` extension.
 ///
-/// Linear-space color factors, normalized outline width, and texture indices
-/// into ``VRMModel/textures``. Defaults match the three-vrm reference
+/// Linear-space color factors, normalized outline width, and direct
+/// ``VRMTexture`` references. Defaults match the three-vrm reference
 /// implementation. Spec:
 /// <https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_materials_mtoon-1.0/README.md>
 public struct VRMMToonMaterial {
     /// Linear-space shade (shadow-side) color factor.
     public var shadeColorFactor: SIMD3<Float> = [0.0, 0.0, 0.0]
-    /// Optional texture index multiplying ``shadeColorFactor`` per-pixel.
-    public var shadeMultiplyTexture: Int?
+    /// Optional texture multiplying ``shadeColorFactor`` per-pixel.
+    public var shadeMultiplyTexture: VRMTexture?
     /// Toon shading shift along the raw-NdotL axis; negative values widen the lit area.
     /// VRM 0.x inputs are converted to this VRM 1.0 parameter space on load.
     public var shadingShiftFactor: Float = 0.0
@@ -648,16 +653,16 @@ public struct VRMMToonMaterial {
     public var giEqualizationFactor: Float = 0.9
     /// Linear-space matcap factor; white by default so a matcap texture multiplies cleanly.
     public var matcapFactor: SIMD3<Float> = [1.0, 1.0, 1.0]
-    /// Optional matcap texture index (additive).
-    public var matcapTexture: Int?
+    /// Optional matcap texture (additive).
+    public var matcapTexture: VRMTexture?
     /// Linear-space parametric rim color; black disables rim lighting.
     public var parametricRimColorFactor: SIMD3<Float> = [0.0, 0.0, 0.0]
     /// Fresnel exponent for parametric rim; higher values produce narrower rim edges.
     public var parametricRimFresnelPowerFactor: Float = 5.0
     /// Constant lift added to the rim term, brightening it uniformly.
     public var parametricRimLiftFactor: Float = 0.0
-    /// Optional texture index multiplying the rim term.
-    public var rimMultiplyTexture: Int?
+    /// Optional texture multiplying the rim term.
+    public var rimMultiplyTexture: VRMTexture?
     /// Mix factor between unlit rim and lit-scene contribution.
     public var rimLightingMixFactor: Float = 1.0
     /// Outline width interpretation (world or screen space). See ``VRMOutlineWidthMode``.
@@ -667,13 +672,13 @@ public struct VRMMToonMaterial {
     /// mode (MToon 1.0).
     public var outlineWidthFactor: Float = 0.0
     /// Optional linear R8 mask texture modulating outline width per-pixel.
-    public var outlineWidthMultiplyTexture: Int?
+    public var outlineWidthMultiplyTexture: VRMTexture?
     /// Linear-space outline color factor.
     public var outlineColorFactor: SIMD3<Float> = [0.0, 0.0, 0.0]
     /// Mix factor between flat outline color and scene-lit outline color.
     public var outlineLightingMixFactor: Float = 1.0
     /// Optional mask texture whose B channel scales UV animation time per pixel.
-    public var uvAnimationMaskTexture: Int?
+    public var uvAnimationMaskTexture: VRMTexture?
     /// UV scroll speed along the X axis.
     public var uvAnimationScrollXSpeedFactor: Float = 0.0
     /// UV scroll speed along the Y axis.
@@ -702,16 +707,16 @@ public struct VRMMToonMaterial {
 
 /// MToon shading-shift texture reference. Provides a per-pixel override on top of ``VRMMToonMaterial/shadingShiftFactor``.
 public struct VRMShadingShiftTexture {
-    /// Index into ``VRMModel/textures``.
-    public var index: Int
+    /// Direct reference to the shading-shift texture.
+    public var texture: VRMTexture
     /// Optional UV channel selector (`TEXCOORD_n`).
     public var texCoord: Int?
     /// Optional per-texel scale factor applied to the sampled shift.
     public var scale: Float?
 
     /// Creates a shading-shift texture reference.
-    public init(index: Int, texCoord: Int? = nil, scale: Float? = nil) {
-        self.index = index
+    public init(texture: VRMTexture, texCoord: Int? = nil, scale: Float? = nil) {
+        self.texture = texture
         self.texCoord = texCoord
         self.scale = scale
     }

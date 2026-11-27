@@ -218,6 +218,9 @@ public class VRMPrimitive: @unchecked Sendable {
     /// Local-space AABB maximum corner. See ``localMin``.
     public var localMax: SIMD3<Float> = SIMD3<Float>(repeating: 0)
 
+    /// When `true`, the renderer skips this primitive in color, depth-prepass, outline, and contact-shadow passes.
+    public var isHidden: Bool = false
+
     /// Per-vertex first-person hidden flags. `1` = hidden when ``VRMRenderer/cameraMode`` is `.firstPerson`, `0` = visible.
     /// Populated by `VRMFirstPersonProcessor` for meshes whose annotation resolves to `.auto`.
     public var firstPersonHiddenFlags: [UInt8] = []
@@ -1188,12 +1191,40 @@ public class VRMNode {
     /// per-frame `weak` reference loads.
     internal static let parentHierarchyRevision = Atomic<UInt64>(0)
 
+    private weak var _parent: VRMNode?
+
     /// Parent node (weak to avoid retain cycles in the scene graph).
-    public weak var parent: VRMNode? {
-        didSet { VRMNode.parentHierarchyRevision.wrappingAdd(1, ordering: .relaxed) }
+    public var parent: VRMNode? {
+        get { _parent }
+        set {
+            _parent = newValue
+            VRMNode.parentHierarchyRevision.wrappingAdd(1, ordering: .relaxed)
+        }
     }
+
+    /// Assigns the parent link without bumping the process-global `parentHierarchyRevision`.
+    /// Used during offline hierarchy construction so background asset loads do not
+    /// invalidate active crowd SpringBone caches.
+    internal func setParentOffline(_ newParent: VRMNode?) {
+        _parent = newParent
+    }
+
     /// Child nodes; rendering walks this hierarchy.
     public var children: [VRMNode] = []
+
+    /// When `true`, the renderer skips this node and all of its descendants across color,
+    /// depth-prepass, outline, and contact-shadow passes.
+    public var isHidden: Bool = false
+
+    /// Returns `true` when this node or any ancestor has ``isHidden`` set.
+    public var isEffectivelyHidden: Bool {
+        var current: VRMNode? = self
+        while let node = current {
+            if node.isHidden { return true }
+            current = node.parent
+        }
+        return false
+    }
 
     /// Local-space translation. Mutated by animation, constraints, and physics.
     public var translation: SIMD3<Float> = [0, 0, 0] { didSet { localMatrixDirty = true } }
@@ -1277,6 +1308,29 @@ public class VRMNode {
     public var mesh: Int?
     /// Index into the model's `skins` array if this node is a skinned-mesh instance; `nil` otherwise.
     public var skin: Int?
+
+    /// Creates a node programmatically without a glTF descriptor.
+    public init(
+        index: Int,
+        name: String? = nil,
+        translation: SIMD3<Float> = [0, 0, 0],
+        rotation: simd_quatf = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1),
+        scale: SIMD3<Float> = [1, 1, 1],
+        mesh: Int? = nil,
+        skin: Int? = nil
+    ) {
+        self.index = index
+        self.name = name
+        self.mesh = mesh
+        self.skin = skin
+        self.translation = translation
+        self.rotation = rotation
+        self.scale = scale
+        self.initialTranslation = translation
+        self.initialRotation = rotation
+        self.initialScale = scale
+        updateLocalMatrix()
+    }
 
     /// Creates a node from a parsed glTF node. Decomposes a supplied 4x4 matrix into T/R/S when present.
     public init(index: Int, gltfNode: GLTFNode) {
@@ -1549,6 +1603,8 @@ public class VRMMaterial: @unchecked Sendable {
     public var occlusionStrength: Float = 1.0
     /// Emissive (self-illuminating) texture.
     public var emissiveTexture: VRMTexture?
+    /// glTF `pbrMetallicRoughness.metallicRoughnessTexture` (linear; G = roughness, B = metallic).
+    public var metallicRoughnessTexture: VRMTexture?
     /// glTF metallic factor. Ignored by the MToon path unless
     /// ``RendererConfig/enableMaterialFinish`` is on; then values below ~0.7
     /// produce a broad sheen and values from ~0.7 a tight metal highlight.
@@ -1600,6 +1656,53 @@ public class VRMMaterial: @unchecked Sendable {
     public var occlusionTextureTransform: GLTFKHRTextureTransform?
     /// `KHR_texture_transform` on ``emissiveTexture``'s `textureInfo`.
     public var emissiveTextureTransform: GLTFKHRTextureTransform?
+    /// `KHR_texture_transform` on ``metallicRoughnessTexture``'s `textureInfo`.
+    public var metallicRoughnessTextureTransform: GLTFKHRTextureTransform?
+
+    /// Recomputes ``renderQueue`` from ``alphaMode``, ``transparentWithZWrite``,
+    /// and ``renderQueueOffset`` per the VRM 1.0 specification.
+    public func recomputeRenderQueue() {
+        let clampedOffset: Int
+        let base: Int
+        switch alphaMode.uppercased() {
+        case "OPAQUE":
+            clampedOffset = 0
+            base = 2000
+        case "MASK":
+            clampedOffset = 0
+            base = 2450
+        case "BLEND":
+            if transparentWithZWrite {
+                clampedOffset = max(0, min(9, renderQueueOffset))
+                base = 2510
+            } else {
+                clampedOffset = max(-9, min(9, renderQueueOffset))
+                base = 3000
+            }
+        default:
+            clampedOffset = 0
+            base = 2000
+        }
+        renderQueueOffset = clampedOffset
+        renderQueue = base + clampedOffset
+    }
+
+    /// Updates ``baseColorFactor`` and optionally derives a matching MToon ``VRMMToonMaterial/shadeColorFactor``.
+    public func setTint(
+        _ color: SIMD4<Float>,
+        updateShadeColor: Bool = true,
+        shadeTintMultiplier: Float = 0.75
+    ) {
+        baseColorFactor = color
+        if updateShadeColor, var mtoon = mtoon {
+            mtoon.shadeColorFactor = SIMD3<Float>(
+                color.x * shadeTintMultiplier,
+                color.y * shadeTintMultiplier,
+                color.z * shadeTintMultiplier
+            )
+            self.mtoon = mtoon
+        }
+    }
 
     /// `true` when this material is transparent and writes to depth (combination of VRM 1.0 flag and VRM 0.x heuristics).
     /// Used by the render-item sorter to place these materials between OPAQUE and BLEND queues.
@@ -1682,12 +1785,18 @@ public class VRMMaterial: @unchecked Sendable {
             roughnessFactor = pbr.roughnessFactor ?? 1.0
 
             if let baseColorTextureInfo = pbr.baseColorTexture {
-                if baseColorTextureInfo.index < textures.count {
+                if baseColorTextureInfo.index >= 0 && baseColorTextureInfo.index < textures.count {
                     baseColorTexture = textures[baseColorTextureInfo.index]
                 }
                 if let transform = baseColorTextureInfo.khrTextureTransform {
                     khrTextureTransform = transform
                 }
+            }
+            if let mrTextureInfo = pbr.metallicRoughnessTexture {
+                if mrTextureInfo.index >= 0 && mrTextureInfo.index < textures.count {
+                    metallicRoughnessTexture = textures[mrTextureInfo.index]
+                }
+                metallicRoughnessTextureTransform = mrTextureInfo.khrTextureTransform
             }
         }
 
@@ -1784,21 +1893,8 @@ public class VRMMaterial: @unchecked Sendable {
                     clampedOffset = 0
                 }
                 renderQueueOffset = clampedOffset
-
-                // VRM 1.0 base render queue values per alpha mode + transparentWithZWrite
-                let base: Int
-                switch alphaMode.uppercased() {
-                case "OPAQUE":
-                    base = 2000
-                case "MASK":
-                    base = 2450
-                case "BLEND":
-                    base = transparentWithZWrite ? 2510 : 3000
-                default:
-                    base = 2000
-                }
-                renderQueue = base + clampedOffset
             }
+            recomputeRenderQueue()
             // Wire KHR_texture_transform from baseColorTexture into mtoon
             if let transform = khrTextureTransform {
                 mtoon?.textureTransform = transform
@@ -1806,7 +1902,7 @@ public class VRMMaterial: @unchecked Sendable {
         }
         // VRM 0.x: material properties from document-level VRM extension
         else if let vrm0Prop = vrm0MaterialProperty {
-            mtoon = vrm0Prop.toMToonMaterial()
+            mtoon = vrm0Prop.toMToonMaterial(textures: textures)
 
             // Also get base color from VRM 0.x _Color vector property if present (sRGB to Linear)
             if let colorVec = vrm0Prop.vectorProperties["_Color"], colorVec.count >= 4 {
@@ -1852,6 +1948,8 @@ public class VRMMaterial: @unchecked Sendable {
                     transparentWithZWrite = true
                 }
             }
+        } else {
+            recomputeRenderQueue()
         }
     }
 
@@ -1956,20 +2054,22 @@ public class VRMMaterial: @unchecked Sendable {
             mtoon.uvAnimationRotationSpeedFactor = uvAnimationRotationSpeedFactor
         }
 
-        // Texture references
+        // Texture references (resolved directly to VRMTexture instances)
         if let shadeMultiplyTexture = mtoonExt["shadeMultiplyTexture"] as? [String: Any],
-           let index = shadeMultiplyTexture["index"] as? Int {
-            mtoon.shadeMultiplyTexture = index
+           let index = shadeMultiplyTexture["index"] as? Int,
+           index >= 0, index < textures.count {
+            mtoon.shadeMultiplyTexture = textures[index]
             mtoon.shadeMultiplyTextureTransform = Self.textureTransform(in: shadeMultiplyTexture)
         }
 
         // Shading shift texture with scale support
         if let shadingShiftTexture = mtoonExt["shadingShiftTexture"] as? [String: Any],
-           let index = shadingShiftTexture["index"] as? Int {
+           let index = shadingShiftTexture["index"] as? Int,
+           index >= 0, index < textures.count {
             let texCoord = shadingShiftTexture["texCoord"] as? Int
             let scale = floatScalar(from: shadingShiftTexture["scale"])
             mtoon.shadingShiftTexture = VRMShadingShiftTexture(
-                index: index,
+                texture: textures[index],
                 texCoord: texCoord,
                 scale: scale
             )
@@ -1978,29 +2078,33 @@ public class VRMMaterial: @unchecked Sendable {
 
         // MatCap texture
         if let matcapTexture = mtoonExt["matcapTexture"] as? [String: Any],
-           let index = matcapTexture["index"] as? Int {
-            mtoon.matcapTexture = index
+           let index = matcapTexture["index"] as? Int,
+           index >= 0, index < textures.count {
+            mtoon.matcapTexture = textures[index]
             mtoon.matcapTextureTransform = Self.textureTransform(in: matcapTexture)
         }
 
         // Rim multiply texture
         if let rimMultiplyTexture = mtoonExt["rimMultiplyTexture"] as? [String: Any],
-           let index = rimMultiplyTexture["index"] as? Int {
-            mtoon.rimMultiplyTexture = index
+           let index = rimMultiplyTexture["index"] as? Int,
+           index >= 0, index < textures.count {
+            mtoon.rimMultiplyTexture = textures[index]
             mtoon.rimMultiplyTextureTransform = Self.textureTransform(in: rimMultiplyTexture)
         }
 
         // Outline width multiply texture
         if let outlineWidthMultiplyTexture = mtoonExt["outlineWidthMultiplyTexture"] as? [String: Any],
-           let index = outlineWidthMultiplyTexture["index"] as? Int {
-            mtoon.outlineWidthMultiplyTexture = index
+           let index = outlineWidthMultiplyTexture["index"] as? Int,
+           index >= 0, index < textures.count {
+            mtoon.outlineWidthMultiplyTexture = textures[index]
             mtoon.outlineWidthMultiplyTextureTransform = Self.textureTransform(in: outlineWidthMultiplyTexture)
         }
 
         // UV animation mask texture
         if let uvAnimationMaskTexture = mtoonExt["uvAnimationMaskTexture"] as? [String: Any],
-           let index = uvAnimationMaskTexture["index"] as? Int {
-            mtoon.uvAnimationMaskTexture = index
+           let index = uvAnimationMaskTexture["index"] as? Int,
+           index >= 0, index < textures.count {
+            mtoon.uvAnimationMaskTexture = textures[index]
             mtoon.uvAnimationMaskTextureTransform = Self.textureTransform(in: uvAnimationMaskTexture)
         }
 

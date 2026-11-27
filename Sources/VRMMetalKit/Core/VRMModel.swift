@@ -52,7 +52,7 @@ import Metal
 /// ```
 ///
 /// - SeeAlso: ``VRMRenderer``, ``VRMLoadingOptions``, ``VRMError``.
-public class VRMModel: @unchecked Sendable {
+public class VRMModel: VRMSceneContent, @unchecked Sendable {
     // MARK: - Thread Safety
     let lock = NSLock()
 
@@ -61,6 +61,143 @@ public class VRMModel: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return try body()
+    }
+
+    // MARK: - Granular Mutation Revisions
+
+    /// Bumped whenever scene topology changes (nodes, meshes, primitives, attachments, or pipeline-affecting material modes).
+    public private(set) var topologyRevision: UInt64 = 0
+    /// Bumped whenever material colors, textures, or MToon parameters change.
+    public private(set) var materialRevision: UInt64 = 0
+    /// Bumped whenever node or primitive visibility flags change.
+    public private(set) var visibilityRevision: UInt64 = 0
+    /// Bumped whenever the set of skins or any skin's joint count changes.
+    public private(set) var skinLayoutRevision: UInt64 = 0
+    /// Bumped whenever skin joint mappings or inverse bind matrices change without changing layout.
+    public private(set) var skinContentRevision: UInt64 = 0
+    /// Bumped whenever SpringBone chains or colliders change.
+    public private(set) var physicsRevision: UInt64 = 0
+
+    internal func bumpTopologyRevisionLocked() { topologyRevision &+= 1 }
+    internal func bumpMaterialRevisionLocked() { materialRevision &+= 1 }
+    internal func bumpVisibilityRevisionLocked() { visibilityRevision &+= 1 }
+    internal func bumpSkinLayoutRevisionLocked() { skinLayoutRevision &+= 1 }
+    internal func bumpSkinContentRevisionLocked() { skinContentRevision &+= 1 }
+    internal func bumpPhysicsRevisionLocked() {
+        physicsRevision &+= 1
+        springBoneRevision &+= 1
+    }
+
+    /// Runs a transactional batch of model edits while holding the model lock once,
+    /// publishing all affected revision counters atomically on exit.
+    public func edit<T>(_ body: (VRMModelEditor) throws -> T) rethrows -> T {
+        lock.lock()
+        let editor = VRMModelEditor(model: self)
+        defer {
+            if editor.topologyDirty { topologyRevision &+= 1 }
+            if editor.materialsDirty { materialRevision &+= 1 }
+            if editor.visibilityDirty { visibilityRevision &+= 1 }
+            if editor.skinLayoutDirty { skinLayoutRevision &+= 1 }
+            if editor.skinContentDirty { skinContentRevision &+= 1 }
+            if editor.physicsDirty {
+                physicsRevision &+= 1
+                springBoneRevision &+= 1
+            }
+            let shouldRecomputeBounds = editor.topologyDirty
+            lock.unlock()
+            if shouldRecomputeBounds {
+                finalizeModelLocalBounds()
+            }
+        }
+        return try body(editor)
+    }
+
+    /// Marks the model's materials as modified after direct property mutations outside ``edit(_:)``.
+    /// Renderers watching ``materialRevision`` will refresh expression base colors on the next draw.
+    public func markMaterialsModified() {
+        withLock {
+            materialRevision &+= 1
+        }
+    }
+
+    /// Returns a deduplicated list of every live Metal texture and buffer currently
+    /// referenced by this model (base textures, material-referenced/composited textures,
+    /// mesh vertex/index/morph/visibility buffers, and SpringBone GPU buffers).
+    ///
+    /// Hosts using Metal 4 residency sets can call this on load and whenever
+    /// ``topologyRevision``, ``materialRevision``, or ``physicsRevision`` advances.
+    public func liveGPUResources() -> [any MTLResource] {
+        withLock {
+            liveGPUResourcesLocked()
+        }
+    }
+
+    internal func liveGPUResourcesLocked() -> [any MTLResource] {
+        var resources: [any MTLResource] = []
+        var seen = Set<ObjectIdentifier>()
+
+        @inline(__always)
+        func appendIfNew(_ resource: (any MTLResource)?) {
+            guard let resource else { return }
+            let id = ObjectIdentifier(resource as AnyObject)
+            if seen.insert(id).inserted {
+                resources.append(resource)
+            }
+        }
+
+        func collect(from content: any VRMSceneContent) {
+            for texture in content.textures {
+                appendIfNew(texture.mtlTexture)
+            }
+            for material in content.materials {
+                appendIfNew(material.baseColorTexture?.mtlTexture)
+                appendIfNew(material.normalTexture?.mtlTexture)
+                appendIfNew(material.occlusionTexture?.mtlTexture)
+                appendIfNew(material.emissiveTexture?.mtlTexture)
+                appendIfNew(material.metallicRoughnessTexture?.mtlTexture)
+                if let mtoon = material.mtoon {
+                    appendIfNew(mtoon.shadeMultiplyTexture?.mtlTexture)
+                    appendIfNew(mtoon.shadingShiftTexture?.texture.mtlTexture)
+                    appendIfNew(mtoon.matcapTexture?.mtlTexture)
+                    appendIfNew(mtoon.rimMultiplyTexture?.mtlTexture)
+                    appendIfNew(mtoon.outlineWidthMultiplyTexture?.mtlTexture)
+                    appendIfNew(mtoon.uvAnimationMaskTexture?.mtlTexture)
+                }
+            }
+            for mesh in content.meshes {
+                for primitive in mesh.primitives {
+                    appendIfNew(primitive.vertexBuffer)
+                    appendIfNew(primitive.attributeBuffer)
+                    appendIfNew(primitive.indexBuffer)
+                    for buffer in primitive.morphPositionBuffers { appendIfNew(buffer) }
+                    for buffer in primitive.morphNormalBuffers { appendIfNew(buffer) }
+                    for buffer in primitive.morphTangentBuffers { appendIfNew(buffer) }
+                    appendIfNew(primitive.morphPositionsSoA)
+                    appendIfNew(primitive.morphNormalsSoA)
+                    appendIfNew(primitive.basePositionsBuffer)
+                    appendIfNew(primitive.baseNormalsBuffer)
+                    appendIfNew(primitive.firstPersonHiddenFlagsBuffer)
+                }
+            }
+        }
+
+        collect(from: self)
+
+        if let sb = springBoneBuffers {
+            appendIfNew(sb.bonePosPrev)
+            appendIfNew(sb.bonePosCurr)
+            appendIfNew(sb.parentPosPrev)
+            appendIfNew(sb.parentPosCurr)
+            appendIfNew(sb.boneParams)
+            appendIfNew(sb.collisionAux)
+            appendIfNew(sb.restLengths)
+            appendIfNew(sb.bindDirections)
+            appendIfNew(sb.sphereColliders)
+            appendIfNew(sb.capsuleColliders)
+            appendIfNew(sb.planeColliders)
+        }
+
+        return resources
     }
 
     // MARK: - Properties
@@ -106,7 +243,10 @@ public class VRMModel: @unchecked Sendable {
     /// Defines physics chains, stiffness, gravity, and colliders. Physics simulation
     /// is performed on the GPU via `SpringBoneComputeSystem`.
     public var springBone: VRMSpringBone? {
-        didSet { springBoneRevision &+= 1 }
+        didSet {
+            springBoneRevision &+= 1
+            physicsRevision &+= 1
+        }
     }
 
     /// Monotonically incremented whenever `springBone` or `nodes` is mutated so
@@ -622,547 +762,25 @@ public class VRMModel: @unchecked Sendable {
         context: VRMLoadingContext? = nil,
         limits: VRMLoaderLimits = .default
     ) async throws {
-        let skipLogging = context?.options.optimizations.contains(.skipVerboseLogging) ?? false
-        let useBufferPreloading = context?.options.optimizations.contains(.preloadBuffers) ?? false
-        
-        if !skipLogging {
-            vrmLog("[VRMModel] Starting loadResources")
-        }
-        
-        // === Loading Phase: Buffer Preloading ===
-        var preloadedBuffers: [Int: Data]?
-        if useBufferPreloading {
-            await context?.updatePhase(.preloadingBuffers, progress: 0)
-            
-            if !skipLogging {
-                vrmLog("[VRMModel] Preloading buffers in parallel...")
-            }
-            
-            let preloader = BufferPreloader(document: gltf, baseURL: baseURL)
-            preloadedBuffers = await preloader.preloadAllBuffers(binaryData: binaryData)
-            
-            if !skipLogging {
-                vrmLog("[VRMModel] ✅ Preloaded \(preloadedBuffers?.count ?? 0) buffers")
-            }
-            
-            await context?.updatePhase(.preloadingBuffers, progress: 1.0)
-        }
-        
-        let bufferLoader = BufferLoader(
+        let loaded = try await VRMResourceLoader.load(
             document: gltf,
             binaryData: binaryData,
             baseURL: baseURL,
-            preloadedData: preloadedBuffers,
-            limits: limits
+            device: device,
+            vrm0MaterialProperties: vrm0MaterialProperties,
+            specVersion: specVersion,
+            context: context,
+            limits: limits,
+            offlineHierarchy: false,
+            sanitizeJoints: true
         )
-        try bufferLoader.validateTotalBufferBytes()
-
-        // Identify which textures need linear format (not sRGB):
-        // - Normal maps (geometrical data, not color)
-        // - Occlusion maps (linear ambient-light attenuation)
-        // - outlineWidthMultiplyTexture (linear R8 per MToon spec)
-        // - uvAnimationMaskTexture (linear R8 per MToon spec)
-        var normalMapTextureIndices = Set<Int>()
-        var occlusionTextureIndices = Set<Int>()
-        var colorTextureIndices = Set<Int>()
-        var outlineWidthMaskTextureIndicesLocal = Set<Int>()
-        var uvAnimationMaskTextureIndicesLocal = Set<Int>()
-        for material in vrm0MaterialProperties {
-            for key in ["_MainTex", "_ShadeTexture", "_SphereAdd", "_RimTexture"] {
-                if let index = material.textureProperties[key], index >= 0 {
-                    colorTextureIndices.insert(index)
-                }
-            }
-        }
-        if !skipLogging {
-            vrmLog("[VRMModel] 🔍 Scanning \(gltf.materials?.count ?? 0) materials for linear textures...")
-        }
-        for (matIdx, material) in (gltf.materials ?? []).enumerated() {
-            let matName = material.name ?? "material_\(matIdx)"
-            if let occlusionTexture = material.occlusionTexture {
-                occlusionTextureIndices.insert(occlusionTexture.index)
-            }
-            if let baseColorTexture = material.pbrMetallicRoughness?.baseColorTexture {
-                colorTextureIndices.insert(baseColorTexture.index)
-            }
-            if let emissiveTexture = material.emissiveTexture {
-                colorTextureIndices.insert(emissiveTexture.index)
-            }
-            if let normalTexture = material.normalTexture {
-                normalMapTextureIndices.insert(normalTexture.index)
-                if !skipLogging {
-                    vrmLog("[VRMModel] ⚠️ Material '\(matName)' uses texture \(normalTexture.index) as NORMAL MAP (will use linear format)")
-                }
-            }
-            if !skipLogging {
-                if let baseColorTex = material.pbrMetallicRoughness?.baseColorTexture {
-                    vrmLog("[VRMModel] ✅ Material '\(matName)' uses texture \(baseColorTex.index) as BASE COLOR (will use sRGB)")
-                }
-            }
-            if let extensions = material.extensions,
-               let mtoonExt = extensions["VRMC_materials_mtoon"] as? [String: Any] {
-                for key in ["shadeMultiplyTexture", "matcapTexture", "rimMultiplyTexture"] {
-                    if let texture = mtoonExt[key] as? [String: Any], let index = texture["index"] as? Int {
-                        colorTextureIndices.insert(index)
-                    }
-                }
-                if let outlineTex = mtoonExt["outlineWidthMultiplyTexture"] as? [String: Any],
-                   let idx = outlineTex["index"] as? Int {
-                    outlineWidthMaskTextureIndicesLocal.insert(idx)
-                }
-                if let uvAnimTex = mtoonExt["uvAnimationMaskTexture"] as? [String: Any],
-                   let idx = uvAnimTex["index"] as? Int {
-                    uvAnimationMaskTextureIndicesLocal.insert(idx)
-                }
-            }
-        }
-        if !skipLogging {
-            vrmLog("[VRMModel] 📊 Normal map texture indices: \(normalMapTextureIndices.sorted())")
-        }
-        let sharedOcclusionTextureIndices = occlusionTextureIndices.intersection(colorTextureIndices)
-        let allLinearTextureIndices = normalMapTextureIndices
-            .union(occlusionTextureIndices.subtracting(sharedOcclusionTextureIndices))
-            .union(outlineWidthMaskTextureIndicesLocal)
-            .union(uvAnimationMaskTextureIndicesLocal)
-
-        outlineWidthMaskTextureIndices = outlineWidthMaskTextureIndicesLocal
-        uvAnimationMaskTextureIndices = uvAnimationMaskTextureIndicesLocal
-
-        // === Loading Phase: Textures ===
-        let textureCount = gltf.textures?.count ?? 0
-        await context?.updatePhase(.loadingTextures, totalItems: textureCount)
-        
-        if !skipLogging {
-            vrmLog("[VRMModel] Loading \(textureCount) textures")
-        }
-        
-        if let device = device {
-            // One state per distinct glTF sampler, shared across the
-            // textures that name it (see GLTFSamplerCache).
-            let samplerCache = GLTFSamplerCache(device: device)
-            let useParallelLoading = context?.options.optimizations.contains(.parallelTextureLoading) ?? false
-
-            let compressColorTextures = context?.options.optimizations.contains(.aggressiveTextureCompression) ?? false
-
-            if useParallelLoading && textureCount > 1 {
-                // Use parallel texture loader for better performance
-                if !skipLogging {
-                    vrmLog("[VRMModel] Using parallel texture loading (\(textureCount) textures)")
-                }
-                
-                let parallelLoader = ParallelTextureLoader(
-                    device: device,
-                    bufferLoader: bufferLoader,
-                    document: gltf,
-                    baseURL: baseURL,
-                    maxConcurrentLoads: min(4, textureCount)
-                )
-                parallelLoader.compressColorTextures = compressColorTextures
-                
-                let indices = Array(0..<textureCount)
-                let loadedTextures = try await parallelLoader.loadTexturesParallelThrowing(
-                    indices: indices,
-                    linearTextureIndices: allLinearTextureIndices
-                ) { completed, total in
-                    Task {
-                        await context?.updateProgress(
-                            itemsCompleted: completed,
-                            totalItems: total
-                        )
-                    }
-                }
-                
-                // Build textures array in order
-                var loadedCount = 0
-                for textureIndex in 0..<textureCount {
-                    let textureName = gltf.textures?[safe: textureIndex]?.name ?? "texture_\(textureIndex)"
-                    if let mtlTexture = loadedTextures[textureIndex] {
-                        let vrmTexture = VRMTexture(name: textureName)
-                        vrmTexture.mtlTexture = mtlTexture
-                        vrmTexture.sampler = samplerCache.samplerState(forTextureAt: textureIndex, in: gltf)
-                        textures.append(vrmTexture)
-                        loadedCount += 1
-                    } else {
-                        textures.append(VRMTexture(name: textureName))
-                    }
-                }
-                
-                if !skipLogging {
-                    vrmLog("[VRMModel] ✅ Parallel texture loading complete: \(loadedCount)/\(textureCount) loaded")
-                }
-            } else {
-                // Sequential loading (original implementation)
-                let textureLoader = TextureLoader(device: device, bufferLoader: bufferLoader, document: gltf, baseURL: baseURL)
-                textureLoader.compressColorTextures = compressColorTextures
-                for textureIndex in 0..<textureCount {
-                    try await context?.checkCancellation()
-                    await context?.updateProgress(
-                        itemsCompleted: textureIndex,
-                        totalItems: textureCount
-                    )
-                    
-                    let isLinear = allLinearTextureIndices.contains(textureIndex)
-                    let useSRGB = !isLinear
-                    let textureName = gltf.textures?[safe: textureIndex]?.name ?? "texture_\(textureIndex)"
-                    
-                    if let mtlTexture = try await textureLoader.loadTexture(at: textureIndex, sRGB: useSRGB) {
-                        let vrmTexture = VRMTexture(name: textureName)
-                        vrmTexture.mtlTexture = mtlTexture
-                        vrmTexture.sampler = samplerCache.samplerState(forTextureAt: textureIndex, in: gltf)
-                        textures.append(vrmTexture)
-                    } else {
-                        textures.append(VRMTexture(name: textureName))
-                    }
-                }
-            }
-        } else {
-            // No device, create empty texture placeholders
-            for textureIndex in 0..<textureCount {
-                let textureName = gltf.textures?[safe: textureIndex]?.name
-                textures.append(VRMTexture(name: textureName))
-            }
-        }
-
-        // === Loading Phase: Materials ===
-        let materialCount = gltf.materials?.count ?? 0
-        await context?.updatePhase(.loadingMaterials, totalItems: materialCount)
-        
-        if !skipLogging {
-            vrmLog("[VRMModel] Loading \(materialCount) materials")
-        }
-        
-        let useParallelMaterials = context?.options.optimizations.contains(.parallelMaterialLoading) ?? false
-        
-        if useParallelMaterials && materialCount > 1 {
-            // Use parallel material loading
-            if !skipLogging {
-                vrmLog("[VRMModel] Using parallel material loading (\(materialCount) materials)")
-            }
-            
-            let parallelLoader = ParallelMaterialLoader(
-                document: gltf,
-                textures: textures,
-                vrm0MaterialProperties: vrm0MaterialProperties,
-                vrmVersion: specVersion
-            )
-            
-            let indices = Array(0..<materialCount)
-            let loadedMaterials = await parallelLoader.loadMaterialsParallel(
-                indices: indices
-            ) { completed, total in
-                Task {
-                    await context?.updateProgress(
-                        itemsCompleted: completed,
-                        totalItems: total
-                    )
-                }
-            }
-            
-            // Build materials array in order
-            var loadedCount = 0
-            for materialIndex in 0..<materialCount {
-                if let material = loadedMaterials[materialIndex] {
-                    materials.append(material)
-                    loadedCount += 1
-                }
-            }
-            
-            if !skipLogging {
-                vrmLog("[VRMModel] ✅ Parallel material loading complete: \(loadedCount)/\(materialCount) loaded")
-            }
-        } else {
-            // Sequential loading
-            for materialIndex in 0..<materialCount {
-                try await context?.checkCancellation()
-                await context?.updateProgress(itemsCompleted: materialIndex, totalItems: materialCount)
-                
-                if let gltfMaterial = gltf.materials?[safe: materialIndex] {
-                    let vrm0Prop = materialIndex < vrm0MaterialProperties.count ? vrm0MaterialProperties[materialIndex] : nil
-                    let material = VRMMaterial(from: gltfMaterial, textures: textures, vrm0MaterialProperty: vrm0Prop, vrmVersion: specVersion)
-                    materials.append(material)
-                }
-            }
-        }
-
-        // Shared color/data images need separate mip chains: color averages
-        // in linear light and may weight alpha; occlusion averages raw R.
-        if let device, !sharedOcclusionTextureIndices.isEmpty {
-            let loader = TextureLoader(device: device, bufferLoader: bufferLoader, document: gltf, baseURL: baseURL)
-            var linearOcclusionTextures: [Int: VRMTexture] = [:]
-            for index in sharedOcclusionTextureIndices.sorted() {
-                try await context?.checkCancellation()
-                let texture = VRMTexture(name: textures[safe: index]?.name,
-                                         mtlTexture: try await loader.loadTexture(at: index, sRGB: false))
-                texture.sampler = textures[safe: index]?.sampler
-                linearOcclusionTextures[index] = texture
-            }
-            for (index, material) in (gltf.materials ?? []).enumerated() {
-                if let textureIndex = material.occlusionTexture?.index,
-                   let texture = linearOcclusionTextures[textureIndex] {
-                    materials[safe: index]?.occlusionTexture = texture
-                }
-            }
-        }
-
-        // === Loading Phase: Meshes ===
-        let meshCount = gltf.meshes?.count ?? 0
-        await context?.updatePhase(.loadingMeshes, totalItems: meshCount)
-        
-        if !skipLogging {
-            vrmLog("[VRMModel] Loading \(meshCount) meshes")
-        }
-        
-        let useParallelMeshLoading = context?.options.optimizations.contains(.parallelMeshLoading) ?? false
-
-        // One limiter shared by every primitive decode across all meshes gives a
-        // true global cap on concurrent decodes (and thus peak live decode memory),
-        // independent of how the across-mesh and intra-mesh task groups multiply.
-        // Sized to the running machine's cores; only leaf decodes acquire it.
-        let decodeLimiter = AsyncConcurrencyLimiter(limit: ProcessInfo.processInfo.activeProcessorCount)
-
-        if useParallelMeshLoading && meshCount > 1 {
-            // Use parallel mesh loading for better performance
-            if !skipLogging {
-                vrmLog("[VRMModel] Using parallel mesh loading (\(meshCount) meshes)")
-            }
-
-            let parallelLoader = ParallelMeshLoader(
-                device: device,
-                document: gltf,
-                bufferLoader: bufferLoader,
-                concurrencyLimiter: decodeLimiter
-            )
-            
-            let indices = Array(0..<meshCount)
-            let loadedMeshes = try await parallelLoader.loadMeshesParallelThrowing(
-                indices: indices
-            ) { completed, total in
-                Task {
-                    await context?.updateProgress(
-                        itemsCompleted: completed,
-                        totalItems: total
-                    )
-                }
-            }
-            
-            // Build meshes array in order
-            var loadedCount = 0
-            for meshIndex in 0..<meshCount {
-                if let mesh = loadedMeshes[meshIndex] {
-                    meshes.append(mesh)
-                    loadedCount += 1
-                }
-            }
-            
-            if !skipLogging {
-                vrmLog("[VRMModel] ✅ Parallel mesh loading complete: \(loadedCount)/\(meshCount) loaded")
-            }
-        } else {
-            // Sequential loading
-            for meshIndex in 0..<meshCount {
-                try await context?.checkCancellation()
-                await context?.updateProgress(itemsCompleted: meshIndex, totalItems: meshCount)
-                
-                if let gltfMesh = gltf.meshes?[safe: meshIndex] {
-                    let mesh = try await VRMMesh.load(from: gltfMesh, document: gltf, device: device, bufferLoader: bufferLoader, concurrencyLimiter: decodeLimiter)
-                    meshes.append(mesh)
-                }
-            }
-        }
-
-        // === Loading Phase: Hierarchy ===
-        await context?.updatePhase(.buildingHierarchy, progress: 0)
-        try await context?.checkCancellation()
-        buildNodeHierarchy()
-        await context?.updatePhase(.buildingHierarchy, progress: 1.0)
-
-        // === Loading Phase: Skins ===
-        let skinCount = gltf.skins?.count ?? 0
-        await context?.updatePhase(.loadingSkins, totalItems: skinCount)
-        
-        for skinIndex in 0..<skinCount {
-            try await context?.checkCancellation()
-            await context?.updateProgress(itemsCompleted: skinIndex, totalItems: skinCount)
-            
-            if let gltfSkin = gltf.skins?[skinIndex] {
-                let skin = try VRMSkin(from: gltfSkin, nodes: nodes, document: gltf, bufferLoader: bufferLoader)
-                skins.append(skin)
-            }
-        }
-
-        // IRON DOME: Sanitize joint indices
-        await context?.updatePhase(.sanitizingJoints, progress: 0.5)
-        sanitizeAllMeshJoints()
-        await context?.updatePhase(.sanitizingJoints, progress: 1.0)
-
-        // VRM 0.0 → 1.0: companion pass to the per-node TRS conjugation in
-        // `buildNodeHierarchy()`. Must run after skins load their IBMs from
-        // the glTF accessor.
-        applyVRM0InverseBindMatrixConjugation()
-    }
-
-    /// VRM 0.0 → 1.0: rotate every skin's `inverseBindMatrix` by `Ry180` (left-multiply).
-    ///
-    /// Companion to the deliberate VRM 0.x → +Z-facing deviation in
-    /// `buildNodeHierarchy()` (see #299, closed as not planned). That pass conjugates each node's local
-    /// TRS so joint world matrices end up as `Ry180 · M_old · Ry180⁻¹`.
-    /// `inverseBindMatrices` are loaded later from the glTF accessor in the
-    /// original VRM 0.x frame, so `jointMatrix = joint.worldMatrix · IBM` would
-    /// expand to `Ry180 · M_old · Ry180⁻¹ · M_old⁻¹` — a non-trivial per-joint
-    /// translation (`Ry180·p − p` for a joint at position `p` with identity
-    /// rotation) rather than the intended `Ry180`.  Left-multiplying every IBM by
-    /// `Ry180` cancels the stray `Ry180⁻¹` so the skinning result is
-    /// `Ry180 · vertex_world_old` at every pose, matching the render-time Y-axis
-    /// rotation this load-time pass replaces.
-    private func applyVRM0InverseBindMatrixConjugation() {
-        guard isVRM0 else { return }
-        // 180° rotation about Y as a 4x4: negate the X and Z components of every
-        // column. Cheap to write inline so the math is auditable next to the
-        // node-side conjugation in `buildNodeHierarchy()`.
-        let ry180 = float4x4(
-            SIMD4<Float>(-1, 0,  0, 0),
-            SIMD4<Float>( 0, 1,  0, 0),
-            SIMD4<Float>( 0, 0, -1, 0),
-            SIMD4<Float>( 0, 0,  0, 1)
-        )
-        for skin in skins {
-            for i in 0..<skin.inverseBindMatrices.count {
-                skin.inverseBindMatrices[i] = ry180 * skin.inverseBindMatrices[i]
-            }
-        }
-    }
-
-    /// "Iron Dome" joint sanitization - ensures all mesh joint indices are within valid bounds.
-    ///
-    /// This is called after skins are loaded, when we know the actual bone count for each skin.
-    /// It iterates through all node->mesh->skin associations and sanitizes any out-of-bounds
-    /// joint indices, preventing vertex explosions from sentinel values (65535) or
-    /// indices that exceed the skeleton size.
-    private func sanitizeAllMeshJoints() {
-        guard !skins.isEmpty else { return }
-
-        var totalSanitized = 0
-
-        // Iterate through nodes that have both mesh and skin
-        for node in nodes {
-            guard let meshIndex = node.mesh,
-                  meshIndex < meshes.count,
-                  let skinIndex = node.skin,
-                  skinIndex < skins.count else {
-                continue
-            }
-
-            let mesh = meshes[meshIndex]
-            let skin = skins[skinIndex]
-            let maxJointIndex = skin.joints.count - 1
-
-            guard maxJointIndex >= 0 else { continue }
-
-            // Sanitize each primitive in the mesh
-            for (primIndex, primitive) in mesh.primitives.enumerated() {
-                let sanitized = primitive.sanitizeJoints(maxJointIndex: maxJointIndex)
-                if sanitized > 0 {
-                    vrmLog("[IRON DOME] Mesh '\(mesh.name ?? "unnamed")' prim \(primIndex): sanitized \(sanitized) joints (max valid: \(maxJointIndex))")
-                    totalSanitized += sanitized
-                }
-            }
-        }
-
-        if totalSanitized > 0 {
-            vrmLog("[IRON DOME] ✅ Total sanitized joint indices: \(totalSanitized)")
-        }
-    }
-
-    private func buildNodeHierarchy() {
-        guard let gltfNodes = gltf.nodes else { return }
-
-        // Create all nodes
-        for (index, gltfNode) in gltfNodes.enumerated() {
-            let node = VRMNode(index: index, gltfNode: gltfNode)
-            nodes.append(node)
-        }
-
-        // Build parent-child relationships with validation
-        for (index, gltfNode) in gltfNodes.enumerated() {
-            if let childIndices = gltfNode.children {
-                for childIndex in childIndices {
-                    if childIndex < nodes.count {
-                        let childNode = nodes[childIndex]
-
-                        // Validation: Prevent multiple parents (graph cycles/dag)
-                        if let existingParent = childNode.parent {
-                            vrmLog("⚠️ [HIERARCHY] Node \(childIndex) ('\(childNode.name ?? "unnamed")') already has parent '\(existingParent.name ?? "unnamed")'. Skipping re-parenting to '\(nodes[index].name ?? "unnamed")'.")
-                            continue
-                        }
-
-                        // Validation: Prevent duplicate children
-                        if nodes[index].children.contains(where: { $0 === childNode }) {
-                            vrmLog("⚠️ [HIERARCHY] Node \(childIndex) is already a child of '\(nodes[index].name ?? "unnamed")'. Skipping duplicate add.")
-                            continue
-                        }
-
-                        childNode.parent = nodes[index]
-                        nodes[index].children.append(childNode)
-                    }
-                }
-            }
-        }
-
-        // Calculate initial transforms. updateWorldTransform() recurses
-        // through children, so walking ROOTS covers every node exactly once
-        // (the previous all-nodes pass recomputed subtrees O(depth) times).
-        for node in nodes where node.parent == nil {
-            node.updateWorldTransform()
-        }
-
-        // VRM 0.0 → VRM 1.0 coordinate conversion.
-        //
-        // DELIBERATE DEVIATION from the VRM 0.x specification (#299, closed as not planned).
-        // The VRM 0.x spec says the model faces -Z in glTF coordinates. VRMMetalKit
-        // instead rotates every VRM 0.x model 180° around Y at load time so that it
-        // faces +Z, matching the VRM 1.0 convention.
-        //
-        // Rationale:
-        //   1. Most VRM 0.x content was authored in Unity and previewed in viewers
-        //      that also apply a Z-axis flip; rendering in the raw -Z orientation
-        //      produces a back-of-head view under a standard +Z-facing camera.
-        //   2. A single consistent +Z-facing coordinate space lets physics, animation,
-        //      culling, ARKit body tracking, and client camera code share one convention
-        //      regardless of whether the source file is VRM 0.x or VRM 1.0.
-        //   3. Left limbs end up at positive X, matching VRM 1.0 humanoid layout.
-        //
-        // Consequence: VRM 0.x models load visually consistent with VRM 1.0 models and
-        // with typical Unity-origin previews, but they do not strictly preserve the
-        // spec-mandated -Z forward direction. The matching `inverseBindMatrices` pass
-        // runs after skins are loaded — see `applyVRM0InverseBindMatrixConjugation()`;
-        // without it skinning at rest would displace vertices by `Ry180·p − p` for each
-        // joint.
-        if isVRM0 {
-            for node in nodes {
-                // Conjugate local rotation by 180° Y: (x, y, z, w) → (-x, y, -z, w)
-                node.rotation = simd_normalize(
-                    simd_quatf(ix: -node.rotation.imag.x,
-                               iy:  node.rotation.imag.y,
-                               iz: -node.rotation.imag.z,
-                               r:   node.rotation.real)
-                )
-                // Rotate translation: (x, y, z) → (-x, y, -z)
-                node.translation = SIMD3<Float>(-node.translation.x,
-                                                 node.translation.y,
-                                                -node.translation.z)
-                // Update bind pose storage so resetToBindPose() stays consistent
-                node.initialRotation = node.rotation
-                node.initialTranslation = node.translation
-                // Scale magnitudes are unchanged under 180° rotation
-                node.updateLocalMatrix()
-            }
-            // Recalculate world transforms after mutating every local matrix
-            for node in nodes where node.parent == nil {
-                node.updateWorldTransform()
-            }
-        }
-
-        // PERFORMANCE: Build normalized name lookup table for fast animation lookups
+        textures = loaded.textures
+        materials = loaded.materials
+        meshes = loaded.meshes
+        nodes = loaded.nodes
+        skins = loaded.skins
+        outlineWidthMaskTextureIndices = loaded.outlineWidthMaskTextureIndices
+        uvAnimationMaskTextureIndices = loaded.uvAnimationMaskTextureIndices
         buildNodeLookupTable()
     }
 

@@ -574,11 +574,19 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
     /// Lazily-built radial falloff texture for the opt-in contact shadow.
     var contactShadowTexture: MTLTexture?
-    /// Contact-shadow mesh bounds for the most recently drawn model.
-    private var contactShadowMeshCache: (model: ObjectIdentifier, entries: [ContactShadowMeshEntry])?
+    /// Contact-shadow mesh bounds for the most recently drawn model + topology revision.
+    private var contactShadowMeshCache: (model: ObjectIdentifier, topologyRevision: UInt64, entries: [ContactShadowMeshEntry])?
     /// Per-material hair-band opt-in for the current model and config.
     private var hairHighlightMaterials: [Bool] = []
-    private var hairHighlightMaterialsKey: (model: ObjectIdentifier, config: HairHighlightConfig)?
+    private var hairHighlightMaterialsKey: (model: ObjectIdentifier, topologyRevision: UInt64, config: HairHighlightConfig)?
+
+    // Revision-driven model synchronization state
+    private var syncedModelID: ObjectIdentifier?
+    private var lastTopologyRevision: UInt64 = 0
+    private var lastMaterialRevision: UInt64 = 0
+    private var lastSkinLayoutRevision: UInt64 = 0
+    private var lastSkinContentRevision: UInt64 = 0
+    private var lastLegacyHeuristicsFlag: Bool = false
 
     // Skinning
     private var skinningSystem: VRMSkinningSystem?
@@ -975,16 +983,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// Renders only the first mesh for debugging.
     public var debugSingleMesh = false
 
-    /// Disables the renderer's automatic material overrides — namely:
-    ///   • forcing `baseColorFactor` to white for face/eye/body/skin materials
-    ///   • forcing `emissiveFactor` to zero on every material
-    ///   • clobbering `shadeColorFactor` / `shadingToonyFactor` /
-    ///     `shadingShiftFactor` on face materials
-    /// Default `false` retains legacy gameplay rendering. Set `true` for
-    /// stylized / silhouette use cases (e.g. menu hosts) that need full
-    /// CPU-side control of material values.
-    public var disableAutoMaterialOverrides = false
-
     /// Enables an additive directional rim term in the MToon fragment shader.
     /// For every enabled scene light, the shader adds
     ///   `pow(1 - N·V, additiveDirectionalRimPower) * max(0, N·L) * lightColor * intensity`
@@ -1073,8 +1071,61 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// Expression-weight fingerprint that produced ``morphedBuffers``.
     private var lastMorphWeightsFingerprint: UInt64?
 
+    /// Spec-driven render bucket for v2.0 rendering (`RendererConfig.legacyMaterialHeuristics == false`).
+    ///
+    /// - `0`: `OPAQUE`
+    /// - `1`: `MASK`
+    /// - `2`: `BLEND` with `transparentWithZWrite`
+    /// - `3`: `BLEND` without Z-write (sorted back-to-front per view by `viewZ`)
+    public static func specDrivenRenderOrder(alphaMode: String, transparentWithZWrite: Bool) -> Int {
+        switch alphaMode.lowercased() {
+        case "mask":
+            return 1
+        case "blend":
+            return transparentWithZWrite ? 2 : 3
+        default:
+            return 0
+        }
+    }
+
+    /// Snapshot of the most recently sorted render items for white-box tests.
+    internal var cachedRenderItemSummary: [(materialName: String, renderOrder: Int, effectiveAlphaMode: String, effectiveDoubleSided: Bool, renderQueue: Int)] {
+        (cachedRenderItems ?? []).map {
+            ($0.materialName, $0.renderOrder, $0.effectiveAlphaMode, $0.effectiveDoubleSided, $0.materialRenderQueue)
+        }
+    }
+
+    /// Invalidates cached render items, contact-shadow bounds, and hair-highlight lookups
+    /// so they are rebuilt on the next draw.
+    public func invalidateRenderItems() {
+        cacheNeedsRebuild = true
+        cachedRenderItems = nil
+        contactShadowMeshCache = nil
+        hairHighlightMaterialsKey = nil
+    }
+
+    /// Refreshes expression controller base material colors for all materials on the loaded model.
+    public func refreshBaseMaterialColors() {
+        guard let model else { return }
+        model.withLock {
+            expressionController?.refreshBaseMaterialColors(from: model)
+        }
+    }
+
+    /// Refreshes expression controller base material colors for the material at `materialIndex`.
+    public func refreshBaseMaterialColor(at materialIndex: Int) {
+        guard let model else { return }
+        model.withLock {
+            guard materialIndex >= 0 && materialIndex < model.materials.count else { return }
+            expressionController?.refreshBaseMaterialColor(
+                materialIndex: materialIndex,
+                from: model.materials[materialIndex]
+            )
+        }
+    }
+
     /// Render-order slot for a NON-face material, from its alpha mode and VRM
-    /// `renderQueue`. Lower sorts (and draws) earlier.
+    /// `renderQueue`. Used only when ``RendererConfig/legacyMaterialHeuristics`` is `true`.
     ///
     /// - `0` opaque
     /// - `1` cutout — alpha-tested MASK in the VRM Cutout band (`renderQueue < 2500`).
@@ -1307,7 +1358,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         contactShadowMeshCache = nil
         hairHighlightMaterialsKey = nil
         morphedBuffers.removeAll(keepingCapacity: true)
+        compositorMorphedBuffers.removeAll(keepingCapacity: true)
         lastMorphWeightsFingerprint = nil
+        syncedModelID = ObjectIdentifier(model)
+        lastTopologyRevision = model.topologyRevision
+        lastMaterialRevision = model.materialRevision
+        lastSkinLayoutRevision = model.skinLayoutRevision
+        lastSkinContentRevision = model.skinContentRevision
+        lastLegacyHeuristicsFlag = config.legacyMaterialHeuristics
 
         // Rest-pose hips anchor for the skinned-primitive frustum cull
         // (#301): each frame the inflated rest bounds are translated by the
@@ -1320,9 +1378,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
 
         // Initialize skinning system with all skins for proper offset allocation
-        if !model.skins.isEmpty {
-            skinningSystem?.setupForSkins(model.skins)
-        }
+        skinningSystem?.syncForSkins(
+            model.skins,
+            layoutRevision: model.skinLayoutRevision,
+            contentRevision: model.skinContentRevision
+        )
 
         // Pre-compute per-vertex first-person hidden flags for auto-annotated skinned meshes.
         processFirstPersonAutoFlags(model: model, device: device)
@@ -1341,45 +1401,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
 
         // Initialize base material colors for expression-driven material color binds
-        for (materialIndex, material) in model.materials.enumerated() {
-            // Store base color factor (RGBA)
-            expressionController?.setBaseMaterialColor(
-                materialIndex: materialIndex,
-                type: .color,
-                color: material.baseColorFactor
-            )
-
-            // Store emissive factor (RGB + 1.0 alpha)
-            expressionController?.setBaseMaterialColor(
-                materialIndex: materialIndex,
-                type: .emissionColor,
-                color: SIMD4<Float>(material.emissiveFactor, 1.0)
-            )
-
-            // Store MToon-specific colors if available
-            if let mtoon = material.mtoon {
-                expressionController?.setBaseMaterialColor(
-                    materialIndex: materialIndex,
-                    type: .shadeColor,
-                    color: SIMD4<Float>(mtoon.shadeColorFactor, 1.0)
-                )
-                expressionController?.setBaseMaterialColor(
-                    materialIndex: materialIndex,
-                    type: .matcapColor,
-                    color: SIMD4<Float>(mtoon.matcapFactor, 1.0)
-                )
-                expressionController?.setBaseMaterialColor(
-                    materialIndex: materialIndex,
-                    type: .rimColor,
-                    color: SIMD4<Float>(mtoon.parametricRimColorFactor, 1.0)
-                )
-                expressionController?.setBaseMaterialColor(
-                    materialIndex: materialIndex,
-                    type: .outlineColor,
-                    color: SIMD4<Float>(mtoon.outlineColorFactor, 1.0)
-                )
-            }
-        }
+        expressionController?.refreshBaseMaterialColors(from: model)
 
         // Initialize SpringBone GPU compute system if available
         if model.springBone != nil {
@@ -1510,7 +1532,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 guard let basePositions = primitive.basePositionsBuffer,
                       let deltaPositions = primitive.morphPositionsSoA,
                       let outputBuffer = morphTargetSystem.getOrCreateMorphedPositionBuffer(
-                          primitiveID: ObjectIdentifier(primitive).hashValue,
+                          for: primitive,
                           vertexCount: primitive.vertexCount
                       ) else {
                     // Debug: Log why compute path fails
@@ -1922,6 +1944,54 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         vrmLog("[VRMRenderer] Model has \(model.nodes.count) nodes, \(model.meshes.count) meshes")
 
         if simulate {
+            // Revision-driven synchronization (frozen across stereo compositor eyes when simulate == false).
+            let currentModelID = ObjectIdentifier(model)
+            if syncedModelID != currentModelID {
+                syncedModelID = currentModelID
+                lastTopologyRevision = model.topologyRevision
+                lastMaterialRevision = model.materialRevision
+                lastSkinLayoutRevision = model.skinLayoutRevision
+                lastSkinContentRevision = model.skinContentRevision
+                lastLegacyHeuristicsFlag = config.legacyMaterialHeuristics
+                cacheNeedsRebuild = true
+                cachedRenderItems = nil
+                contactShadowMeshCache = nil
+                hairHighlightMaterialsKey = nil
+                morphedBuffers.removeAll(keepingCapacity: true)
+                compositorMorphedBuffers.removeAll(keepingCapacity: true)
+                lastMorphWeightsFingerprint = nil
+                expressionController?.refreshBaseMaterialColors(from: model)
+            } else {
+                let topologyChanged = (model.topologyRevision != lastTopologyRevision)
+                    || (config.legacyMaterialHeuristics != lastLegacyHeuristicsFlag)
+                if topologyChanged {
+                    lastTopologyRevision = model.topologyRevision
+                    lastLegacyHeuristicsFlag = config.legacyMaterialHeuristics
+                    cacheNeedsRebuild = true
+                    cachedRenderItems = nil
+                    contactShadowMeshCache = nil
+                    hairHighlightMaterialsKey = nil
+                    morphedBuffers.removeAll(keepingCapacity: true)
+                    compositorMorphedBuffers.removeAll(keepingCapacity: true)
+                    lastMorphWeightsFingerprint = nil
+                    if let morphTargetSystem {
+                        var livePrimitives = Set<ObjectIdentifier>()
+                        for mesh in model.meshes {
+                            for primitive in mesh.primitives {
+                                livePrimitives.insert(ObjectIdentifier(primitive))
+                            }
+                        }
+                        morphTargetSystem.prune(keeping: livePrimitives)
+                    }
+                    expressionController?.refreshBaseMaterialColors(from: model)
+                    lastMaterialRevision = model.materialRevision
+                } else if model.materialRevision != lastMaterialRevision {
+                    lastMaterialRevision = model.materialRevision
+                    expressionController?.refreshBaseMaterialColors(from: model)
+                }
+            }
+            expressionController?.ensureWeightsUpdated()
+
             // CRITICAL: Update world transforms for all nodes.
             // This must be done before rendering to calculate proper positions UNLESS the
             // host has already done it (e.g. via AnimationPlayer.update, which calls
@@ -2190,7 +2260,15 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         // CRITICAL UPDATE ORDER: Update all skinning matrices BEFORE any drawing
         // This ensures all joint palettes are fresh for the entire frame
-        let hasSkinning = !model.skins.isEmpty
+        if hasSkinning || lastSkinLayoutRevision != model.skinLayoutRevision || lastSkinContentRevision != model.skinContentRevision {
+            skinningSystem?.syncForSkins(
+                model.skins,
+                layoutRevision: model.skinLayoutRevision,
+                contentRevision: model.skinContentRevision
+            )
+            lastSkinLayoutRevision = model.skinLayoutRevision
+            lastSkinContentRevision = model.skinContentRevision
+        }
 
         if hasSkinning {
             vrmLog("[UPDATE ORDER] Frame \(frameCounter): Updating all skin palettes BEFORE drawing")
@@ -2212,13 +2290,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // Update joint matrices for ALL skins
             for (skinIndex, skin) in model.skins.enumerated() {
                 vrmLog("[SKINNING] Updating \(skin.joints.count) joint matrices for skin \(skinIndex) at offset \(skin.matrixOffset)")
-                skinningSystem?.updateJointMatrices(for: skin, skinIndex: skinIndex)
+                skinningSystem?.updateJointMatrices(for: skin)
 
                 // PHASE 1 VALIDATION: GPU readback check (every 60 frames)
                 #if DEBUG
                 if frameCounter % 60 == 0 && skinIndex == 0 {
                     vrmLog("\n═══ PHASE 1: GPU VALIDATION ═══")
-                    skinningSystem?.validateJointMatricesGPU(for: skin, skinIndex: skinIndex, expectNonIdentity: animationState != nil)
+                    skinningSystem?.validateJointMatricesGPU(for: skin, expectNonIdentity: animationState != nil)
                 }
                 #endif
             }
@@ -2401,7 +2479,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         var allItems: [RenderItem]
 
         if let cached = cachedRenderItems, !cacheNeedsRebuild {
-            // Use cached items - no need to rebuild
+            // Release extra ref before optional in-place transparent tail sort to avoid CoW.
+            cachedRenderItems = nil
             allItems = cached
             if frameCounter % 300 == 0 {
                 vrmLog("[VRMRenderer] 🚀 PERF: Using cached render items (\(allItems.count) items)")
@@ -2412,17 +2491,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 vrmLog("[VRMRenderer] 🔨 Building render item cache...")
             }
 
-            // OPTIMIZATION: Pre-allocate single array instead of 8 separate arrays + concatenation
-            // Typical models have 20-100 primitives across all meshes
             let estimatedPrimitiveCount = model.meshes.reduce(0) { $0 + $1.primitives.count }
             allItems = []
             allItems.reserveCapacity(estimatedPrimitiveCount)
 
-            // O(1) firstPerson annotation lookup, built once per draw rather than scanned
-            // per primitive (VRMC_vrm-1.0 §firstPerson — missing nodes default to .auto).
             let firstPersonLookup = firstPersonAnnotationLookup(in: model)
+            let useLegacyHeuristics = config.legacyMaterialHeuristics
 
-            // Keep counters for logging (no longer need separate arrays)
             var opaqueCount = 0
             var maskCount = 0
             var blendCount = 0
@@ -2433,342 +2508,295 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             var faceHighlightCount = 0
             var globalPrimitiveIndex = 0
 
-            // Collect all primitives and categorize by alpha mode
             for (nodeIndex, node) in model.nodes.enumerated() {
-            // Debug: Log ALL nodes to find which one has the mesh
-            if frameCounter <= 2 {
-                vrmLog("[NODE SCAN] Node \(nodeIndex) '\(node.name ?? "unnamed")': mesh=\(node.mesh ?? -1)")
-            }
-
-            guard let meshIndex = node.mesh,
-                  meshIndex < model.meshes.count else {
-                // Debug nodes without meshes
-                if node.name?.lowercased().contains("face") == true || frameCounter <= 2 {
-                    vrmLog("[NODE DEBUG] Node '\(node.name ?? "")' (index \(nodeIndex)) has no mesh (mesh=\(node.mesh ?? -1))")
-                }
-                continue
-            }
-
-            // Debug all nodes with meshes - log (node, mesh, skin) triplet
-            let mesh = model.meshes[meshIndex]
-            if frameCounter < 2 {
-                vrmLog("[DRAW LIST] Node[\(nodeIndex)] '\(node.name ?? "?")' → mesh[\(meshIndex)] '\(mesh.name ?? "?")' skin=\(node.skin ?? -1)")
-            }
-            totalMeshesWithNodes += 1
-
-            for (primIdxInMesh, primitive) in mesh.primitives.enumerated() {
-                let alphaMode = primitive.materialIndex.flatMap { idx in
-                    idx < model.materials.count ? model.materials[idx].alphaMode : nil
-                }?.lowercased() ?? "opaque"
-
-                let materialName = (primitive.materialIndex.flatMap { idx in
-                    idx < model.materials.count ? model.materials[idx].name : nil
-                }) ?? "unnamed"
-
-                // Enhanced face material detection logging
-                let nodeName = node.name ?? "unnamed"
-                let meshName = mesh.name ?? "unnamed_mesh"
-
-                // OPTIMIZATION: Compute lowercased strings once early for debug logging
-                let materialNameLower = materialName.lowercased()
-                let nodeNameLower = nodeName.lowercased()
-                let meshNameLower = meshName.lowercased()
-
-                // Check if this is a face-related primitive
-                let nodeIsFace = nodeNameLower.contains("face") || nodeNameLower.contains("eye")
-                let meshIsFace = meshNameLower.contains("face") || meshNameLower.contains("eye")
-                let materialIsFace = materialNameLower.contains("face") || materialNameLower.contains("eye")
-
-                if nodeIsFace || meshIsFace || materialIsFace {
-                    vrmLog("[FACE MATERIAL DEBUG] Potential face material detected:")
-                    vrmLog("  - Node: '\(nodeName)' (face: \(nodeIsFace))")
-                    vrmLog("  - Mesh: '\(meshName)' (face: \(meshIsFace))")
-                    vrmLog("  - Material: '\(materialName)' (face: \(materialIsFace))")
-                    vrmLog("  - Alpha mode: \(alphaMode)")
-                    vrmLog("  - Material index: \(primitive.materialIndex ?? -1)")
-
-                    // Check texture transparency if available
-                    if let matIdx = primitive.materialIndex, matIdx < model.materials.count {
-                        let material = model.materials[matIdx]
-                        vrmLog("  - Base color texture: \(material.baseColorTexture != nil)")
-                        vrmLog("  - Double sided: \(material.doubleSided)")
-                        vrmLog("  - Alpha cutoff: \(material.alphaCutoff)")
-                    }
+                if frameCounter <= 2 {
+                    vrmLog("[NODE SCAN] Node \(nodeIndex) '\(node.name ?? "unnamed")': mesh=\(node.mesh ?? -1)")
                 }
 
-                // Get original doubleSided and alphaCutoff from material
-                let originalDoubleSided = primitive.materialIndex.flatMap { idx in
-                    idx < model.materials.count ? model.materials[idx].doubleSided : false
-                } ?? false
-
-                let originalAlphaCutoff = primitive.materialIndex.flatMap { idx in
-                    idx < model.materials.count ? model.materials[idx].alphaCutoff : 0.5
-                } ?? 0.5
-
-                // Get renderQueue from VRM material (for sorting face/transparent materials)
-                let materialRenderQueue = primitive.materialIndex.flatMap { idx in
-                    idx < model.materials.count ? model.materials[idx].renderQueue : 2000
-                } ?? 2000
-
-                // First-person annotation filter (VRMC_vrm-1.0 §firstPerson).
-                // Skip this primitive if its node annotation excludes it from the current camera mode.
-                let fpAnnotation = firstPersonLookup[nodeIndex] ?? .auto
-                if !shouldRenderPrimitive(annotation: fpAnnotation, cameraMode: cameraMode) {
-                    globalPrimitiveIndex += 1
+                guard let meshIndex = node.mesh,
+                      meshIndex < model.meshes.count else {
                     continue
                 }
 
-                // OPTIMIZATION: Single face/body detection pass (consolidates 3 separate checks)
-                // Include body, clothing, and transparentZWrite materials for proper categorization
-                let isFaceMaterial = materialNameLower.contains("face") || materialNameLower.contains("eye") ||
-                                    nodeNameLower.contains("face") || nodeNameLower.contains("eye") ||
-                                    (materialNameLower.contains("body") && !materialNameLower.contains("face")) ||
-                                    materialNameLower.contains("cloth") || materialNameLower.contains("tops") ||
-                                    materialNameLower.contains("bottoms") || materialNameLower.contains("skirt") ||
-                                    materialNameLower.contains("shorts") || materialNameLower.contains("pants") ||
-                                    materialNameLower.contains("lace") || materialNameLower.contains("collar") ||
-                                    materialNameLower.contains("ribbon") || materialNameLower.contains("frill") ||
-                                    materialNameLower.contains("ruffle")
-                let isEyeMaterial = materialNameLower.contains("eye") && !materialNameLower.contains("brow")
-                let isBodyMaterial = materialNameLower.contains("body") || materialNameLower.contains("skin") ||
-                                     nodeNameLower.contains("body") || meshNameLower.contains("body")
-                let nodeOrMeshIsFace = nodeNameLower.contains("face") || nodeNameLower.contains("eye") ||
-                                      meshNameLower.contains("face") || meshNameLower.contains("eye")
-                var item = RenderItem(
-                    node: node,
-                    mesh: mesh,
-                    primitive: primitive,
-                    alphaMode: alphaMode,
-                    materialName: materialName,
-                    meshIndex: meshIndex,
-                    effectiveAlphaMode: alphaMode,  // Start with original
-                    effectiveDoubleSided: originalDoubleSided,  // Start with original
-                    effectiveAlphaCutoff: originalAlphaCutoff,  // Start with original cutoff
-                    faceCategory: nil,  // Will be set if this is a face material
-                    materialNameLower: materialNameLower,
-                    nodeNameLower: nodeNameLower,
-                    meshNameLower: meshNameLower,
-                    isFaceMaterial: isFaceMaterial,
-                    isEyeMaterial: isEyeMaterial,
-                    isBodyMaterial: isBodyMaterial,
-                    effectiveAlphaModeRaw: 0,
-                    selectedCullMode: .back,
-                    renderOrder: 0,  // Will be set based on category
-                    materialRenderQueue: materialRenderQueue,
-                    primitiveIndex: globalPrimitiveIndex,
-                    primIdxInMesh: primIdxInMesh
-                )
+                let mesh = model.meshes[meshIndex]
+                if frameCounter < 2 {
+                    vrmLog("[DRAW LIST] Node[\(nodeIndex)] '\(node.name ?? "?")' → mesh[\(meshIndex)] '\(mesh.name ?? "?")' skin=\(node.skin ?? -1)")
+                }
+                totalMeshesWithNodes += 1
 
-                // Enhanced face/body material detection and overrides
-                // OPTIMIZATION: Use pre-computed flags (nodeOrMeshIsFace, isBodyOrSkinMaterial)
-                if nodeOrMeshIsFace {
-                    // Override double-sided for face materials to ensure visibility
-                    item.effectiveDoubleSided = true
+                for (primIdxInMesh, primitive) in mesh.primitives.enumerated() {
+                    let material = primitive.materialIndex.flatMap { idx in
+                        (idx >= 0 && idx < model.materials.count) ? model.materials[idx] : nil
+                    }
+                    let alphaMode = material?.alphaMode.lowercased() ?? "opaque"
+                    let materialName = material?.name ?? "unnamed"
+                    let nodeName = node.name ?? "unnamed"
+                    let meshName = mesh.name ?? "unnamed_mesh"
 
-                    // For face materials, handle different material types:
-                    // - Face skin (OPAQUE or MASK) - main face surface
-                    // - Eyelashes/Eyebrows (MASK) - need transparency
-                    // - Eyes/Mouth interior (OPAQUE) - solid surfaces
+                    let materialNameLower = materialName.lowercased()
+                    let nodeNameLower = nodeName.lowercased()
+                    let meshNameLower = meshName.lowercased()
 
-                    if let matIdx = primitive.materialIndex, matIdx < model.materials.count {
-                        let material = model.materials[matIdx]
+                    let originalDoubleSided = material?.doubleSided ?? false
+                    let originalAlphaCutoff = material?.alphaCutoff ?? 0.5
+                    let materialRenderQueue = material?.renderQueue ?? 2000
+                    let isTransparentWithZWrite = material?.isTransparentWithZWrite ?? false
 
-                        // OPTIMIZATION: Use cached lowercased string
-                        if item.materialNameLower.contains("skin") && item.effectiveAlphaMode == "mask" {
-                            // Lower the alpha cutoff for skin to ensure it renders
-                            vrmLog("[FACE FIX] Adjusting alpha cutoff for face skin (favor cutouts)")
-                            vrmLog("  - Material: \(materialName)")
-                            vrmLog("  - Original cutoff: \(material.alphaCutoff)")
-                            // Use a mid cutoff to respect cutout regions (eyes/mouth)
-                            item.effectiveAlphaCutoff = max(0.5, material.alphaCutoff)
+                    // First-person annotation filter (VRMC_vrm-1.0 §firstPerson).
+                    let fpAnnotation = firstPersonLookup[nodeIndex] ?? .auto
+                    if !shouldRenderPrimitive(annotation: fpAnnotation, cameraMode: cameraMode) {
+                        globalPrimitiveIndex += 1
+                        continue
+                    }
+
+                    var item: RenderItem
+                    if useLegacyHeuristics {
+                        let isFaceMaterial = materialNameLower.contains("face") || materialNameLower.contains("eye") ||
+                                            nodeNameLower.contains("face") || nodeNameLower.contains("eye") ||
+                                            (materialNameLower.contains("body") && !materialNameLower.contains("face")) ||
+                                            materialNameLower.contains("cloth") || materialNameLower.contains("tops") ||
+                                            materialNameLower.contains("bottoms") || materialNameLower.contains("skirt") ||
+                                            materialNameLower.contains("shorts") || materialNameLower.contains("pants") ||
+                                            materialNameLower.contains("lace") || materialNameLower.contains("collar") ||
+                                            materialNameLower.contains("ribbon") || materialNameLower.contains("frill") ||
+                                            materialNameLower.contains("ruffle")
+                        let isEyeMaterial = materialNameLower.contains("eye") && !materialNameLower.contains("brow")
+                        let isBodyMaterial = materialNameLower.contains("body") || materialNameLower.contains("skin") ||
+                                             nodeNameLower.contains("body") || meshNameLower.contains("body")
+                        let nodeOrMeshIsFace = nodeNameLower.contains("face") || nodeNameLower.contains("eye") ||
+                                              meshNameLower.contains("face") || meshNameLower.contains("eye")
+
+                        item = RenderItem(
+                            node: node,
+                            mesh: mesh,
+                            primitive: primitive,
+                            alphaMode: alphaMode,
+                            materialName: materialName,
+                            meshIndex: meshIndex,
+                            effectiveAlphaMode: alphaMode,
+                            effectiveDoubleSided: originalDoubleSided,
+                            effectiveAlphaCutoff: originalAlphaCutoff,
+                            faceCategory: nil,
+                            materialNameLower: materialNameLower,
+                            nodeNameLower: nodeNameLower,
+                            meshNameLower: meshNameLower,
+                            isFaceMaterial: isFaceMaterial,
+                            isEyeMaterial: isEyeMaterial,
+                            isBodyMaterial: isBodyMaterial,
+                            effectiveAlphaModeRaw: 0,
+                            selectedCullMode: .back,
+                            renderOrder: 0,
+                            materialRenderQueue: materialRenderQueue,
+                            primitiveIndex: globalPrimitiveIndex,
+                            primIdxInMesh: primIdxInMesh
+                        )
+
+                        if nodeOrMeshIsFace {
+                            item.effectiveDoubleSided = true
+                            if let material, item.materialNameLower.contains("skin") && item.effectiveAlphaMode == "mask" {
+                                item.effectiveAlphaCutoff = max(0.5, material.alphaCutoff)
+                            }
+                        }
+
+                        let isBodyOrSkinMaterial = materialNameLower.contains("body") || materialNameLower.contains("skin")
+                        if isBodyOrSkinMaterial && !item.isFaceMaterial && item.effectiveAlphaMode == "mask" {
+                            item.effectiveAlphaMode = "opaque"
+                        }
+
+                        if item.isFaceMaterial {
+                            if item.materialNameLower.contains("body") && !item.materialNameLower.contains("face") {
+                                item.faceCategory = "body"
+                                item.renderOrder = 0
+                            } else if item.materialNameLower.contains("lace") || item.materialNameLower.contains("collar") ||
+                                      item.materialNameLower.contains("ribbon") || item.materialNameLower.contains("frill") ||
+                                      item.materialNameLower.contains("ruffle") {
+                                item.faceCategory = "transparentZWrite"
+                                item.renderOrder = 8
+                            } else if item.materialNameLower.contains("cloth") || item.materialNameLower.contains("tops") ||
+                                      item.materialNameLower.contains("bottoms") || item.materialNameLower.contains("skirt") ||
+                                      item.materialNameLower.contains("shorts") || item.materialNameLower.contains("pants") {
+                                item.faceCategory = "clothing"
+                                item.renderOrder = 8
+                            } else if item.materialNameLower.contains("mouth") || item.materialNameLower.contains("lip") {
+                                item.faceCategory = "faceOverlay"
+                                item.renderOrder = 2
+                                faceSkinCount += 1
+                            } else if item.materialNameLower.contains("skin") || (item.materialNameLower.contains("face") && !item.materialNameLower.contains("eye")) {
+                                item.faceCategory = "skin"
+                                item.renderOrder = 1
+                                faceSkinCount += 1
+                            } else if item.materialNameLower.contains("brow") {
+                                item.faceCategory = "eyebrow"
+                                item.renderOrder = 2
+                                faceEyebrowCount += 1
+                            } else if item.materialNameLower.contains("line") || item.materialNameLower.contains("lash") {
+                                item.faceCategory = "eyeline"
+                                item.renderOrder = 3
+                                faceEyelineCount += 1
+                            } else if item.materialNameLower.contains("highlight") {
+                                item.faceCategory = "highlight"
+                                item.renderOrder = 6
+                                faceHighlightCount += 1
+                            } else if item.materialNameLower.contains("eye") {
+                                item.faceCategory = "eye"
+                                item.renderOrder = 5
+                                faceEyeCount += 1
+                            } else {
+                                item.faceCategory = "skin"
+                                item.renderOrder = 1
+                                faceSkinCount += 1
+                            }
+
+                            switch item.faceCategory {
+                            case "eye":
+                                item.effectiveAlphaMode = "opaque"
+                                item.effectiveDoubleSided = true
+                            case "highlight":
+                                item.effectiveAlphaMode = "blend"
+                                item.effectiveDoubleSided = true
+                            case "eyeline", "eyebrow":
+                                item.effectiveDoubleSided = true
+                            default:
+                                break
+                            }
+                        } else {
+                            item.renderOrder = VRMRenderer.nonFaceRenderOrder(
+                                alphaMode: item.effectiveAlphaMode, renderQueue: materialRenderQueue)
+                            switch item.effectiveAlphaMode {
+                            case "mask": maskCount += 1
+                            case "blend": blendCount += 1
+                            default: opaqueCount += 1
+                            }
+                        }
+                    } else {
+                        // Spec-driven v2.0 default: strictly honour glTF/VRM alphaMode,
+                        // transparentWithZWrite, doubleSided, alphaCutoff, and renderQueue.
+                        let bucket = VRMRenderer.specDrivenRenderOrder(
+                            alphaMode: alphaMode,
+                            transparentWithZWrite: isTransparentWithZWrite
+                        )
+                        item = RenderItem(
+                            node: node,
+                            mesh: mesh,
+                            primitive: primitive,
+                            alphaMode: alphaMode,
+                            materialName: materialName,
+                            meshIndex: meshIndex,
+                            effectiveAlphaMode: alphaMode,
+                            effectiveDoubleSided: originalDoubleSided,
+                            effectiveAlphaCutoff: originalAlphaCutoff,
+                            faceCategory: nil,
+                            materialNameLower: materialNameLower,
+                            nodeNameLower: nodeNameLower,
+                            meshNameLower: meshNameLower,
+                            isFaceMaterial: false,
+                            isEyeMaterial: false,
+                            isBodyMaterial: false,
+                            effectiveAlphaModeRaw: 0,
+                            selectedCullMode: .back,
+                            renderOrder: bucket,
+                            materialRenderQueue: materialRenderQueue,
+                            primitiveIndex: globalPrimitiveIndex,
+                            primIdxInMesh: primIdxInMesh
+                        )
+                        switch alphaMode {
+                        case "mask": maskCount += 1
+                        case "blend": blendCount += 1
+                        default: opaqueCount += 1
                         }
                     }
 
-                    vrmLog("[FACE HANDLING] node '\(nodeName)' / mesh '\(meshName)'")
-                    vrmLog("  - Material: \(materialName)")
-                    vrmLog("  - Effective alpha mode: \(item.effectiveAlphaMode)")
-                    vrmLog("  - Effective alpha cutoff: \(item.effectiveAlphaCutoff)")
-                    vrmLog("  - Effective double-sided: \(item.effectiveDoubleSided)")
-                }
-
-                // Demote MASK → OPAQUE for body/skin materials.
-                // Body textures have alpha=0 padding that would cause holes via MASK discard.
-                // Clothing materials (tops, bottoms, shoes) keep MASK for proper cutout.
-                let isBodyOrSkinMaterial = materialNameLower.contains("body") || materialNameLower.contains("skin")
-                if isBodyOrSkinMaterial && !item.isFaceMaterial && item.effectiveAlphaMode == "mask" {
-                    item.effectiveAlphaMode = "opaque"
-                    vrmLog("[ALPHA FIX] Demoted '\(materialName)' from MASK to OPAQUE (body/skin)")
-                }
-
-
-                // OPTIMIZATION: Use cached face detection
-                vrmLog("[MAT CLASSIFY] '\(materialName)' isFace=\(item.isFaceMaterial) node='\(node.name ?? "nil")'")
-
-                // OPTIMIZATION: Set renderOrder instead of appending to separate arrays
-                if item.isFaceMaterial {
-                    // Classify face material by type and set category + renderOrder
-                    // Body detection - must come before skin check since body materials contain "skin"
-                    if item.materialNameLower.contains("body") && !item.materialNameLower.contains("face") {
-                        item.faceCategory = "body"
-                        item.renderOrder = 0  // body renders first, pushed back by depth bias
-                        vrmLog("  → Assigned to: body queue (order=0)")
-                    } else if item.materialNameLower.contains("lace") || item.materialNameLower.contains("collar") ||
-                              item.materialNameLower.contains("ribbon") || item.materialNameLower.contains("frill") ||
-                              item.materialNameLower.contains("ruffle") {
-                        item.faceCategory = "transparentZWrite"
-                        item.renderOrder = 8  // After opaque, before regular blend
-                        vrmLog("  → Assigned to: transparentZWrite queue (order=8)")
-                    } else if item.materialNameLower.contains("cloth") || item.materialNameLower.contains("tops") ||
-                              item.materialNameLower.contains("bottoms") || item.materialNameLower.contains("skirt") ||
-                              item.materialNameLower.contains("shorts") || item.materialNameLower.contains("pants") {
-                        item.faceCategory = "clothing"
-                        item.renderOrder = 8  // Same as transparentZWrite for proper layering
-                        vrmLog("  → Assigned to: clothing queue (order=8)")
-                    } else if item.materialNameLower.contains("mouth") || item.materialNameLower.contains("lip") {
-                        // Face mouth/lip overlays - render after base face skin
-                        item.faceCategory = "faceOverlay"
-                        item.renderOrder = 2  // after skin (1), before eyebrow (2) - same as eyebrow but named differently
-                        faceSkinCount += 1
-                        vrmLog("  → Assigned to: face overlay queue (order=2)")
-                    } else if item.materialNameLower.contains("skin") || (item.materialNameLower.contains("face") && !item.materialNameLower.contains("eye")) {
-                        item.faceCategory = "skin"
-                        item.renderOrder = 1  // faceSkin - base face renders first
-                        faceSkinCount += 1
-                        vrmLog("  → Assigned to: skin queue (order=1)")
-                    } else if item.materialNameLower.contains("brow") {
-                        item.faceCategory = "eyebrow"
-                        item.renderOrder = 2  // faceEyebrow
-                        faceEyebrowCount += 1
-                        vrmLog("  → Assigned to: eyebrow queue (order=2)")
-                    } else if item.materialNameLower.contains("line") || item.materialNameLower.contains("lash") {
-                        item.faceCategory = "eyeline"
-                        item.renderOrder = 3  // faceEyeline
-                        faceEyelineCount += 1
-                        vrmLog("  → Assigned to: eyeline queue (order=3)")
-                    } else if item.materialNameLower.contains("highlight") {
-                        item.faceCategory = "highlight"
-                        item.renderOrder = 6  // faceHighlight
-                        faceHighlightCount += 1
-                        vrmLog("  → Assigned to: highlight queue (order=6)")
-                    } else if item.materialNameLower.contains("eye") {
-                        item.faceCategory = "eye"
-                        item.renderOrder = 5  // faceEye
-                        faceEyeCount += 1
-                        vrmLog("  → Assigned to: eye queue (order=5)")
-                    } else {
-                        // Unknown face material - default to skin queue
-                        item.faceCategory = "skin"
-                        item.renderOrder = 1  // faceSkin
-                        faceSkinCount += 1
-                        vrmLog("  → Assigned to: skin queue (default, order=1)")
-                    }
-
-                    // Enforce effective alpha modes per face part for correct pipeline selection
-                    switch item.faceCategory {
-                    case "eye":
-                        // Eyes should be fully opaque geometry rendered after face skin
-                        item.effectiveAlphaMode = "opaque"
-                        item.effectiveDoubleSided = true
-                    case "highlight":
-                        // Eye highlights remain blended overlays
-                        item.effectiveAlphaMode = "blend"
-                        item.effectiveDoubleSided = true
-                    case "eyeline", "eyebrow":
-                        // Often alpha-cutout; ensure double-sided to avoid missing strokes
-                        item.effectiveDoubleSided = true
-                    default:
-                        break
-                    }
-                } else {
-                    // Non-face materials: render-order slot from alpha mode + VRM queue
-                    // (see `nonFaceRenderOrder` — cutout-band MASK sorts early, #322).
-                    item.renderOrder = VRMRenderer.nonFaceRenderOrder(
-                        alphaMode: item.effectiveAlphaMode, renderQueue: materialRenderQueue)
                     switch item.effectiveAlphaMode {
-                    case "mask": maskCount += 1
-                    case "blend": blendCount += 1
-                    default: opaqueCount += 1
+                    case "mask": item.effectiveAlphaModeRaw = 1
+                    case "blend": item.effectiveAlphaModeRaw = 2
+                    default: item.effectiveAlphaModeRaw = 0
                     }
+                    item.selectedCullMode = selectCullMode(
+                        faceCategory: item.faceCategory,
+                        alphaMode: item.effectiveAlphaMode,
+                        isDoubleSided: item.effectiveDoubleSided
+                    )
+
+                    allItems.append(item)
+                    globalPrimitiveIndex += 1
                 }
+            }
 
-                switch item.effectiveAlphaMode {
-                case "mask": item.effectiveAlphaModeRaw = 1
-                case "blend": item.effectiveAlphaModeRaw = 2
-                default: item.effectiveAlphaModeRaw = 0
+            vrmLog("[VRMRenderer] 🎨 Alpha queuing: opaque=\(opaqueCount), mask=\(maskCount), blend=\(blendCount)")
+
+            if useLegacyHeuristics {
+                viewZByIndex = [Float](repeating: .infinity, count: globalPrimitiveIndex)
+                for item in allItems where item.materialRenderQueue >= 2500 {
+                    let worldPos = item.node.worldMatrix.columns.3
+                    viewZByIndex[item.primitiveIndex] = (viewMatrix * worldPos).z
                 }
-                item.selectedCullMode = selectCullMode(
-                    faceCategory: item.faceCategory,
-                    alphaMode: item.effectiveAlphaMode,
-                    isDoubleSided: item.effectiveDoubleSided
-                )
-
-                // OPTIMIZATION: Add to single pre-allocated array
-                allItems.append(item)
-                globalPrimitiveIndex += 1
-            }
-        }
-
-        vrmLog("[VRMRenderer] 🎨 Alpha queuing: opaque=\(opaqueCount), mask=\(maskCount), blend=\(blendCount)")
-
-        // Pre-compute view-space Z for transparent items (flat array indexed by primitiveIndex)
-        // primitiveIndex comes from globalPrimitiveIndex which counts ALL primitives including
-        // first-person-filtered ones that were skipped, so size to globalPrimitiveIndex not allItems.count
-        viewZByIndex = [Float](repeating: .infinity, count: globalPrimitiveIndex)
-        for item in allItems where item.materialRenderQueue >= 2500 {
-            let worldPos = item.node.worldMatrix.columns.3
-            viewZByIndex[item.primitiveIndex] = (viewMatrix * worldPos).z
-        }
-
-        // Multi-tier sorting: renderOrder (name-based) + VRM queue + view-Z + stable order
-        allItems.sort { a, b in
-            // 1. Primary: renderOrder (name-based face/body category ordering)
-            // Order: 0=body/opaque, 1=skin, 2=brow, 3=line, 4=mask, 5=eye, 6=highlight, 7=blend, 8=clothing
-            if a.renderOrder != b.renderOrder {
-                return a.renderOrder < b.renderOrder
+                allItems.sort { a, b in
+                    if a.renderOrder != b.renderOrder {
+                        return a.renderOrder < b.renderOrder
+                    }
+                    if a.materialRenderQueue != b.materialRenderQueue {
+                        return a.materialRenderQueue < b.materialRenderQueue
+                    }
+                    if a.materialRenderQueue >= 2500 {
+                        return viewZByIndex[a.primitiveIndex] < viewZByIndex[b.primitiveIndex]
+                    }
+                    return a.primitiveIndex < b.primitiveIndex
+                }
+            } else {
+                // Static sort of all buckets (0=OPAQUE, 1=MASK, 2=BLEND+ZWrite, 3=BLEND).
+                // The contiguous bucket == 3 tail is re-sorted per view below.
+                allItems.sort { a, b in
+                    if a.renderOrder != b.renderOrder {
+                        return a.renderOrder < b.renderOrder
+                    }
+                    if a.materialRenderQueue != b.materialRenderQueue {
+                        return a.materialRenderQueue < b.materialRenderQueue
+                    }
+                    return a.primitiveIndex < b.primitiveIndex
+                }
             }
 
-            // 2. Secondary: VRM render queue (author's intent for fine-grained ordering)
-            // Within same renderOrder, respect explicit queue differences
-            if a.materialRenderQueue != b.materialRenderQueue {
-                return a.materialRenderQueue < b.materialRenderQueue
+            if frameCounter <= 2 || allItems.count > 50 {
+                vrmLog("[RENDER ITEMS] Total: \(allItems.count) (opaque=\(opaqueCount), mask=\(maskCount), blend=\(blendCount))")
             }
 
-            // 3. Tertiary: Transparent materials (queue >= 2500): back-to-front Z-sorting
-            // This threshold covers TransparentWithZWrite (2450+) and Transparent (3000+)
-            if a.materialRenderQueue >= 2500 {
-                return viewZByIndex[a.primitiveIndex] < viewZByIndex[b.primitiveIndex]
-            }
-
-            // 4. Quaternary: stable definition order for tie-breaking
-            return a.primitiveIndex < b.primitiveIndex
-        }
-
-        if blendCount > 0 && frameCounter < 10 {
-            vrmLog("[VRMRenderer] Sorted \(blendCount) BLEND items by view-space Z (far to near)")
-        }
-        vrmLog("[WORKAROUND CHECK] Got allItems with count: \(allItems.count)")
-
-        // Log render items count using counters
-        if frameCounter <= 2 || allItems.count > 50 {
-            vrmLog("[RENDER ITEMS] Total: \(allItems.count)")
-            vrmLog("  - Opaque (non-face): \(opaqueCount)")
-            vrmLog("  - Face.skin: \(faceSkinCount)")
-            vrmLog("  - Face.eyebrow: \(faceEyebrowCount)")
-            vrmLog("  - Face.eyeline: \(faceEyelineCount)")
-            vrmLog("  - Mask (non-face): \(maskCount)")
-            vrmLog("  - Face.eye: \(faceEyeCount)")
-            vrmLog("  - Face.highlight: \(faceHighlightCount)")
-            vrmLog("  - Blend (non-face): \(blendCount)")
-            vrmLog("[RENDER ITEMS] Processing \(allItems.count) primitives from \(totalMeshesWithNodes) nodes")
-        }
-
-            // Store in cache for future frames
-            cachedRenderItems = allItems
             cacheNeedsRebuild = false
-            if frameCounter % 60 == 0 {
-                vrmLog("[VRMRenderer] ✅ Cached \(allItems.count) render items for reuse")
-            }
         } // End of cache rebuild block
+
+        // Per-view back-to-front Z-sorting for spec-driven BLEND (no Z-write) tail.
+        // Runs on every view (including cache hits and each stereo compositor eye)
+        // using the transformed primitive bounds center.
+        if !config.legacyMaterialHeuristics,
+           let blendTailStart = allItems.firstIndex(where: { $0.renderOrder == 3 }),
+           allItems.count - blendTailStart > 1 {
+            var maxPrimIndex = 0
+            for i in blendTailStart..<allItems.count {
+                if allItems[i].primitiveIndex > maxPrimIndex {
+                    maxPrimIndex = allItems[i].primitiveIndex
+                }
+            }
+            if viewZByIndex.count <= maxPrimIndex {
+                viewZByIndex = [Float](repeating: .infinity, count: maxPrimIndex + 1)
+            }
+            for i in blendTailStart..<allItems.count {
+                let item = allItems[i]
+                let localCenter = (item.primitive.localMin + item.primitive.localMax) * 0.5
+                let worldCenter = item.node.worldMatrix * SIMD4<Float>(localCenter.x, localCenter.y, localCenter.z, 1.0)
+                viewZByIndex[item.primitiveIndex] = (viewMatrix * worldCenter).z
+            }
+            allItems[blendTailStart...].sort { a, b in
+                if a.materialRenderQueue != b.materialRenderQueue {
+                    return a.materialRenderQueue < b.materialRenderQueue
+                }
+                let za = viewZByIndex[a.primitiveIndex]
+                let zb = viewZByIndex[b.primitiveIndex]
+                if za != zb {
+                    return za < zb
+                }
+                return a.primitiveIndex < b.primitiveIndex
+            }
+        }
+        cachedRenderItems = allItems
         performanceTracker?.endPhase(.renderItemBuild)
 
         // DEBUG SINGLE MESH MODE: Only render the first item for systematic testing
@@ -2854,6 +2882,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         refreshHairHighlightMaterials(model: model)
         for (index, item) in itemsToRender.enumerated() {
+            if item.primitive.isHidden || item.node.isEffectivelyHidden {
+                continue
+            }
             let meshName = item.mesh.name ?? "unnamed"
             let materialName = item.materialName
 
@@ -3329,7 +3360,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
 
                     // Verify skin freshness (palette should already be updated at frame start)
-                    skinningSystem?.verifySkinFreshness(skinIndex: skinIndex, frameNumber: frameCounter)
+                    skinningSystem?.verifySkinFreshness(for: skin, frameNumber: frameCounter)
 
                     // VALIDATION: Check joints/weights bounds for first few vertices
                     let paletteCount = skin.joints.count
@@ -3354,8 +3385,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         }
 
                         // Set the buffer with the correct byte offset for this skin
-                        // Use the pre-calculated bufferByteOffset from setupForSkins()
-                        let byteOffset = skin.bufferByteOffset
+                        let byteOffset = skinningSystem?.getBufferOffset(for: skin) ?? skin.bufferByteOffset
 
                         // Debug: Log what we're doing for face rendering
                         if frameCounter % 60 == 0 && item.node.name?.contains("face") == true {
@@ -3456,62 +3486,52 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         mtoonUniforms = MToonMaterialUniforms()
                         mtoonUniforms.vrmVersion = material.vrmVersion == .v0_0 ? 0 : 1
                         mtoonUniforms.baseColorFactor = material.baseColorFactor
+                        mtoonUniforms.normalScale = material.normalScale
+                        mtoonUniforms.occlusionStrength = material.occlusionStrength
                         mtoonUniforms.metallicFactor = material.metallicFactor
                         mtoonUniforms.roughnessFactor = material.roughnessFactor
                         mtoonUniforms.emissiveFactor = material.emissiveFactor
-
-                        #if DEBUG
-                        if frameCounter <= 2 {
-                            vrmLog("[Material] '\(item.materialName)' baseColorFactor: \(material.baseColorFactor)")
-                            if material.baseColorFactor.x > 10.0 || material.baseColorFactor.y > 10.0 ||
-                               material.baseColorFactor.z > 10.0 || material.baseColorFactor.w > 10.0 {
-                                vrmLog("  ⚠️ WARNING: baseColorFactor has extreme values!")
-                            }
+                        if let transform = material.khrTextureTransform {
+                            mtoonUniforms.textureTransformOffsetX = transform.offset.x
+                            mtoonUniforms.textureTransformOffsetY = transform.offset.y
+                            mtoonUniforms.textureTransformRotation = transform.rotation
+                            mtoonUniforms.textureTransformScaleX = transform.scale.x
+                            mtoonUniforms.textureTransformScaleY = transform.scale.y
                         }
-                        #endif
 
-                        if isFaceMaterial && !self.disableAutoMaterialOverrides {
-                            if frameCounter <= 2 {
-                                vrmLog("  🔧 [FACE FIX] Forcing baseColorFactor to white for '\(item.materialName)'")
-                                vrmLog("     - Original: \(mtoonUniforms.baseColorFactor)")
+                        if config.legacyMaterialHeuristics {
+                            if isFaceMaterial {
+                                mtoonUniforms.baseColorFactor = SIMD4<Float>(1.0, 1.0, 1.0, 1.0)
+                                if item.faceCategory != "eye" {
+                                    mtoonUniforms.shadeColorFactor = SIMD3<Float>(0.78, 0.65, 0.60)
+                                    mtoonUniforms.shadingToonyFactor = 0.3
+                                    mtoonUniforms.shadingShiftFactor = -0.2
+                                }
+                                if material.baseColorTexture != nil {
+                                    mtoonUniforms.hasBaseColorTexture = 1
+                                }
                             }
-                            mtoonUniforms.baseColorFactor = SIMD4<Float>(1.0, 1.0, 1.0, 1.0)
-                            if item.faceCategory != "eye" {
-                                mtoonUniforms.shadeColorFactor = SIMD3<Float>(0.78, 0.65, 0.60)
-                                mtoonUniforms.shadingToonyFactor = 0.3
-                                mtoonUniforms.shadingShiftFactor = -0.2
-                            }
-                            if material.baseColorTexture != nil {
-                                mtoonUniforms.hasBaseColorTexture = 1
+                            if let faceCat = item.faceCategory, faceCat == "eye" {
+                                mtoonUniforms.shadeColorFactor = SIMD3<Float>(repeating: 1.0)
+                                mtoonUniforms.shadingToonyFactor = 0.0
+                                mtoonUniforms.shadingShiftFactor = 0.0
+                                mtoonUniforms.rimLightingMixFactor = 0.0
+                                mtoonUniforms.parametricRimColorFactor = SIMD3<Float>(repeating: 0.0)
+                                mtoonUniforms.hasMatcapTexture = 0
                             }
                         }
 
                         mtoonUniforms.alphaMode = item.effectiveAlphaModeRaw
                         mtoonUniforms.alphaCutoff = item.effectiveAlphaCutoff
-
-                        if let faceCat = item.faceCategory, faceCat == "eye", !self.disableAutoMaterialOverrides {
-                            mtoonUniforms.shadeColorFactor = SIMD3<Float>(repeating: 1.0)
-                            mtoonUniforms.shadingToonyFactor = 0.0
-                            mtoonUniforms.shadingShiftFactor = 0.0
-                            mtoonUniforms.rimLightingMixFactor = 0.0
-                            mtoonUniforms.parametricRimColorFactor = SIMD3<Float>(repeating: 0.0)
-                            mtoonUniforms.hasMatcapTexture = 0
-                        }
                     }
 
                     applySurfaceExtensionUniforms(&mtoonUniforms, materialIndex: materialIndex, material: material)
 
-                    // The MToon fragment function samples every slot through
-                    // sampler(0), so one sampler serves the draw: the base
-                    // color texture's, which is the material's primary map
-                    // and the one whose wrap mode is observable in the
-                    // silhouette.
                     encoderStateCache.setFragmentSamplerState(
                         encoder,
                         material.baseColorTexture?.sampler ?? samplerStates["default"],
                         index: 0)
 
-                    // Bind textures in MToon order
                     // Index 0: Base color texture
                     if let texture = material.baseColorTexture,
                        let mtlTexture = texture.mtlTexture {
@@ -3521,28 +3541,22 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         performanceTracker?.recordStateChange(type: .texture)
                     }
 
-                    // Index 1: Shade multiply texture (from MToon)
-                    // When shadeMultiply is the same texture as baseColor with the same
-                    // transform, set shadeUsesBaseColor so the shader reuses the
-                    // already-sampled baseColor (zero extra fetch) instead of binding
-                    // tex[1] and sampling it separately.
+                    // Index 1: Shade multiply texture (direct VRMTexture reference)
                     if let mtoon = material.mtoon {
-                        if let textureIndex = mtoon.shadeMultiplyTexture {
-                            if textureIndex < model.textures.count,
-                               let mtlTexture = model.textures[textureIndex].mtlTexture {
-                                let isSameAsBaseColor = material.baseColorTexture?.mtlTexture === mtlTexture
-                                    && MToonMaterialUniforms.textureTransformRows(mtoon.textureTransform)
-                                        == MToonMaterialUniforms.textureTransformRows(mtoon.shadeMultiplyTextureTransform)
-                                if isSameAsBaseColor {
-                                    encoderStateCache.setFragmentTexture(encoder, nil, index: 1)
-                                    mtoonUniforms.hasShadeMultiplyTexture = 0
-                                    mtoonUniforms.shadeUsesBaseColor = 1
-                                } else {
-                                    encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 1)
-                                    mtoonUniforms.hasShadeMultiplyTexture = 1
-                                    mtoonUniforms.shadeUsesBaseColor = 0
-                                    textureCount += 1
-                                }
+                        if let shadeTex = mtoon.shadeMultiplyTexture,
+                           let mtlTexture = shadeTex.mtlTexture {
+                            let isSameAsBaseColor = material.baseColorTexture?.mtlTexture === mtlTexture
+                                && MToonMaterialUniforms.textureTransformRows(mtoon.textureTransform)
+                                    == MToonMaterialUniforms.textureTransformRows(mtoon.shadeMultiplyTextureTransform)
+                            if isSameAsBaseColor {
+                                encoderStateCache.setFragmentTexture(encoder, nil, index: 1)
+                                mtoonUniforms.hasShadeMultiplyTexture = 0
+                                mtoonUniforms.shadeUsesBaseColor = 1
+                            } else {
+                                encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 1)
+                                mtoonUniforms.hasShadeMultiplyTexture = 1
+                                mtoonUniforms.shadeUsesBaseColor = 0
+                                textureCount += 1
                             }
                         } else {
                             encoderStateCache.setFragmentTexture(encoder, nil, index: 1)
@@ -3554,15 +3568,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     // Index 2: Shading shift texture
                     if let mtoon = material.mtoon,
                        let shadingShift = mtoon.shadingShiftTexture,
-                       shadingShift.index < model.textures.count,
-                       let mtlTexture = model.textures[shadingShift.index].mtlTexture {
+                       let mtlTexture = shadingShift.texture.mtlTexture {
                         encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 2)
                         mtoonUniforms.hasShadingShiftTexture = 1
                         mtoonUniforms.shadingShiftTextureScale = shadingShift.scale ?? 1.0
                         textureCount += 1
                     }
 
-                    // Index 3: Normal texture (provides surface detail)
+                    // Index 3: Normal texture
                     if let mtlTexture = material.normalTexture?.mtlTexture {
                         encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 3)
                         mtoonUniforms.hasNormalTexture = 1
@@ -3582,9 +3595,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
                     // Index 5: Matcap texture
                     if let mtoon = material.mtoon,
-                       let textureIndex = mtoon.matcapTexture,
-                       textureIndex < model.textures.count,
-                       let mtlTexture = model.textures[textureIndex].mtlTexture {
+                       let mtlTexture = mtoon.matcapTexture?.mtlTexture {
                         encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 5)
                         mtoonUniforms.hasMatcapTexture = 1
                         textureCount += 1
@@ -3592,9 +3603,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
                     // Index 6: Rim multiply texture
                     if let mtoon = material.mtoon,
-                       let textureIndex = mtoon.rimMultiplyTexture,
-                       textureIndex < model.textures.count,
-                       let mtlTexture = model.textures[textureIndex].mtlTexture {
+                       let mtlTexture = mtoon.rimMultiplyTexture?.mtlTexture {
                         encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 6)
                         mtoonUniforms.hasRimMultiplyTexture = 1
                         textureCount += 1
@@ -3602,9 +3611,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
                     // Index 7: UV animation mask texture
                     if let mtoon = material.mtoon,
-                       let textureIndex = mtoon.uvAnimationMaskTexture,
-                       textureIndex < model.textures.count,
-                       let mtlTexture = model.textures[textureIndex].mtlTexture {
+                       let mtlTexture = mtoon.uvAnimationMaskTexture?.mtlTexture {
                         encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 7)
                         mtoonUniforms.hasUvAnimationMaskTexture = 1
                         textureCount += 1
@@ -3861,7 +3868,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
                 case "blend":
                     let writesDepth = primitive.materialIndex.map {
-                        $0 < model.materials.count && model.materials[$0].transparentWithZWrite
+                        $0 >= 0 && $0 < model.materials.count && model.materials[$0].isTransparentWithZWrite
                     } ?? false
                     if let blendDepthState = depthStencilStates[writesDepth ? "blendZWrite" : "blend"] {
                         encoderStateCache.setDepthStencilState(encoder,blendDepthState)
@@ -4543,14 +4550,19 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     }
 
     /// Current contact-shadow footprint: the foot joints for a skinned
-    /// humanoid, the world bounds of every mesh node otherwise.
+    /// humanoid, the world bounds of every visible mesh primitive otherwise.
     func contactShadowFootprint(model: VRMModel) -> ContactShadowFootprint? {
         let entries = contactShadowMeshEntries(for: model)
-        let boxes = entries.map { entry in
-            ContactShadowFootprint.MeshBox(
+        var boxes: [ContactShadowFootprint.MeshBox] = []
+        boxes.reserveCapacity(entries.count)
+        for entry in entries {
+            if entry.primitive.isHidden || entry.node.isEffectivelyHidden {
+                continue
+            }
+            boxes.append(ContactShadowFootprint.MeshBox(
                 localMin: entry.localMin,
                 localMax: entry.localMax,
-                transform: model.nodes[entry.transformNode].worldMatrix)
+                transform: entry.transformNode.worldMatrix))
         }
         guard let bounds = ContactShadowFootprint.worldBounds(of: boxes) else { return nil }
 
@@ -4571,36 +4583,31 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         return ContactShadowFootprint.fromMeshBounds(boxes)
     }
 
-    /// Per-model mesh bounds for the contact shadow, cached by model identity.
-    /// A skinned mesh uses its scene root's transform (its own node transform
-    /// is ignored by glTF); a rigid mesh uses its own node.
+    /// Per-model primitive bounds for the contact shadow, cached by model identity + topology revision.
+    /// Hidden status is evaluated dynamically at consumption time in ``contactShadowFootprint(model:)``.
     private func contactShadowMeshEntries(for model: VRMModel) -> [ContactShadowMeshEntry] {
         let key = ObjectIdentifier(model)
-        if let cached = contactShadowMeshCache, cached.model == key {
+        let topoRev = model.topologyRevision
+        if let cached = contactShadowMeshCache, cached.model == key, cached.topologyRevision == topoRev {
             return cached.entries
         }
         var entries: [ContactShadowMeshEntry] = []
         for node in model.nodes {
             guard let meshIndex = node.mesh, meshIndex >= 0, meshIndex < model.meshes.count else { continue }
-            var lo = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
-            var hi = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
-            var found = false
-            for primitive in model.meshes[meshIndex].primitives where primitive.vertexCount > 0 {
-                lo = simd_min(lo, primitive.localMin)
-                hi = simd_max(hi, primitive.localMax)
-                found = true
-            }
-            guard found else { continue }
             var transformNode = node
             if node.skin != nil {
                 while let parent = transformNode.parent { transformNode = parent }
             }
-            entries.append(ContactShadowMeshEntry(
-                transformNode: transformNode.index,
-                localMin: lo,
-                localMax: hi))
+            for primitive in model.meshes[meshIndex].primitives where primitive.vertexCount > 0 {
+                entries.append(ContactShadowMeshEntry(
+                    node: node,
+                    primitive: primitive,
+                    transformNode: transformNode,
+                    localMin: primitive.localMin,
+                    localMax: primitive.localMax))
+            }
         }
-        contactShadowMeshCache = (key, entries)
+        contactShadowMeshCache = (key, topoRev, entries)
         return entries
     }
 
@@ -4671,6 +4678,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         var issued = false
         for item in itemsToRender {
+            if item.primitive.isHidden || item.node.isEffectivelyHidden { continue }
             // v1: opaque, non-face only. Blend/mask/face keep current behavior.
             guard item.effectiveAlphaMode == "opaque", !item.isFaceMaterial else { continue }
             let primitive = item.primitive
@@ -4743,7 +4751,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 let skinIndex = item.node.skin ?? (meshUsesSkinning ? 0 : -1)
                 if skinIndex >= 0, skinIndex < model.skins.count,
                    let jointBuffer = skinningSystem?.getJointMatricesBuffer() {
-                    let byteOffset = model.skins[skinIndex].matrixOffset * MemoryLayout<float4x4>.stride
+                    let skin = model.skins[skinIndex]
+                    let byteOffset = skinningSystem?.getBufferOffset(for: skin) ?? skin.bufferByteOffset
                     encoder.setVertexBuffer(jointBuffer, offset: byteOffset, index: ResourceIndices.jointMatricesBuffer)
                 }
                 if primitive.firstPersonHiddenFlagsBuffer == nil && primitive.vertexCount > 0 {
@@ -4778,11 +4787,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     ) {
         let texture: MTLTexture?
         let sampler: MTLSamplerState?
-        if let textureIndex = mtoon?.outlineWidthMultiplyTexture,
-           textureIndex < model.textures.count,
-           let mtlTexture = model.textures[textureIndex].mtlTexture {
+        if let outlineTex = mtoon?.outlineWidthMultiplyTexture,
+           let mtlTexture = outlineTex.mtlTexture {
             texture = mtlTexture
-            sampler = model.textures[textureIndex].sampler ?? samplerStates["default"]
+            sampler = outlineTex.sampler ?? samplerStates["default"]
         } else {
             texture = outlineWidthFallbackTexture ?? makeOutlineWidthFallbackTexture()
             sampler = samplerStates["default"]
@@ -4792,11 +4800,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         // The hull animates the width mask's UVs, scaled by the UV animation
         // mask, so the vertex stage needs that texture too.
-        var animationMask: MTLTexture?
-        if let textureIndex = mtoon?.uvAnimationMaskTexture,
-           textureIndex < model.textures.count {
-            animationMask = model.textures[textureIndex].mtlTexture
-        }
+        let animationMask: MTLTexture? = mtoon?.uvAnimationMaskTexture?.mtlTexture
         encoderStateCache.setVertexTexture(encoder, animationMask ?? outlineWidthFallbackTexture ?? makeOutlineWidthFallbackTexture(), index: 1)
     }
 
@@ -4897,14 +4901,16 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// string matching.
     private func refreshHairHighlightMaterials(model: VRMModel) {
         let key = ObjectIdentifier(model)
+        let topoRev = model.topologyRevision
         let hair = config.hairHighlight
         if hairHighlightMaterialsKey?.model == key,
+           hairHighlightMaterialsKey?.topologyRevision == topoRev,
            hairHighlightMaterialsKey?.config == hair,
            hairHighlightMaterials.count == model.materials.count {
             return
         }
         hairHighlightMaterials = model.materials.map { hair.applies(toMaterialNamed: $0.name) }
-        hairHighlightMaterialsKey = (key, hair)
+        hairHighlightMaterialsKey = (key, topoRev, hair)
     }
 
     private func baseMToonUniforms(materialIndex: Int, mtoon: VRMMToonMaterial) -> MToonMaterialUniforms {
@@ -4952,6 +4958,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         for item in renderItems {
             let primitive = item.primitive
+            if primitive.isHidden || item.node.isEffectivelyHidden {
+                continue
+            }
 
             // Check if material has outline enabled
             guard let materialIndex = primitive.materialIndex,
@@ -5130,7 +5139,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             if isSkinned, let skinIndex = item.node.skin, skinIndex < model.skins.count {
                 let skin = model.skins[skinIndex]
                 if let jointBuffer = skinningSystem?.getJointMatricesBuffer() {
-                    let byteOffset = skin.matrixOffset * MemoryLayout<float4x4>.stride
+                    let byteOffset = skinningSystem?.getBufferOffset(for: skin) ?? skin.bufferByteOffset
                     encoder.setVertexBuffer(jointBuffer, offset: byteOffset, index: ResourceIndices.jointMatricesBuffer)
                 }
             }

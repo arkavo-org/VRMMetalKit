@@ -264,6 +264,15 @@ public struct RendererConfig {
     /// ignored when ``enableSSAO`` is `false`.
     public var ssaoStrength: Float = 0.6
 
+    /// Opt-in v1 compatibility flag for legacy English material-name heuristics
+    /// (face/eye/body/clothing name-based render ordering, face doubleSided forcing,
+    /// skin MASK→OPAQUE demotion, and non-MToon face white-albedo overrides).
+    ///
+    /// Default `false` (v2.0): uses strict VRM 1.0 / glTF 2.0 spec-driven rendering
+    /// (`OPAQUE → MASK → BLEND+ZWrite → BLEND` with per-view transparent Z-sorting
+    /// and unmodified authored material properties).
+    public var legacyMaterialHeuristics: Bool = false
+
     /// Whether any opt-in surface extension is enabled, which compiles the
     /// extension code into this renderer's MToon pipelines.
     var surfaceExtensionsEnabled: Bool {
@@ -290,7 +299,8 @@ public struct RendererConfig {
         contactShadowOpacity: Float = 0.45,
         contactShadowScale: Float = 1.15,
         enableSSAO: Bool = false,
-        ssaoStrength: Float = 0.6
+        ssaoStrength: Float = 0.6,
+        legacyMaterialHeuristics: Bool = false
     ) {
         self.strict = strict
         self.colorPixelFormat = colorPixelFormat
@@ -311,6 +321,7 @@ public struct RendererConfig {
         self.contactShadowScale = contactShadowScale
         self.enableSSAO = enableSSAO
         self.ssaoStrength = ssaoStrength
+        self.legacyMaterialHeuristics = legacyMaterialHeuristics
     }
 }
 

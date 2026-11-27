@@ -622,7 +622,6 @@ final class CharcoalSketchTests: XCTestCase {
                 material.transparentWithZWrite = false
                 material.mtoon?.outlineWidthMode = .none
             }
-            renderer.disableAutoMaterialOverrides = true
             setAlpha = { alpha in
                 for material in model.materials {
                     material.baseColorFactor = SIMD4<Float>(colour, alpha)
