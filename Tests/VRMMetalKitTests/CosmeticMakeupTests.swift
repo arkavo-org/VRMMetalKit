@@ -712,7 +712,7 @@ final class CosmeticMakeupTests: XCTestCase {
             faceLandmarks: landmarks
         )
 
-        try stack.apply(to: mat)
+        try stack.apply(to: mat, preserveAuthoredFinish: true)
         XCTAssertTrue(mat.hasCosmeticFinishMap)
         let finishTex = try XCTUnwrap(mat.metallicRoughnessTexture?.mtlTexture)
 
@@ -732,5 +732,54 @@ final class CosmeticMakeupTests: XCTestCase {
         XCTAssertEqual(mat.metallicFactor, 0.0, accuracy: 1e-6)
         XCTAssertEqual(mat.roughnessFactor, 0.5, accuracy: 1e-6)
         XCTAssertTrue(mat.metallicRoughnessTexture?.mtlTexture === authoredMR)
+    }
+
+    func testFinishLayerOnVRoidDefaultMetallicOneKeepsUnpaintedFaceMatteByDefault() throws {
+        let baseMTL = try makeSolidTexture(width: 32, height: 32, rgba: (60, 60, 60, 255))
+        let decalMTL = try makeSolidTexture(width: 16, height: 16, rgba: (60, 60, 60, 255))
+
+        // VRoid/UniVRM exports routinely leave metallicFactor = 1.0 on face/skin materials.
+        let gltfMat = try JSONDecoder().decode(GLTFMaterial.self, from: Data(#"{"name":"F00_000_00_Face_00_SKIN"}"#.utf8))
+        let mat = VRMMaterial(from: gltfMat, textures: [])
+        mat.baseColorTexture = VRMTexture(name: "face", mtlTexture: baseMTL)
+        mat.metallicFactor = 1.0
+        mat.roughnessFactor = 0.5
+        mat.mtoon = VRMMToonMaterial()
+        mat.mtoon?.shadeColorFactor = [0.2, 0.2, 0.2]
+        mat.mtoon?.outlineWidthMode = .none
+
+        let landmarks = VRMFaceLandmarks(regions: [
+            .lips: VRMUVRect(minU: 0.55, minV: 0.10, maxU: 0.95, maxV: 0.90)
+        ])
+        let stack = try VRMTextureLayerStack(
+            device: device,
+            layers: [
+                VRMTextureLayer(
+                    name: "lip_gloss",
+                    texture: decalMTL,
+                    blendMode: .normal,
+                    opacity: 1.0,
+                    finish: VRMFinishOverride(metallic: 0.95, roughness: 0.15),
+                    landmarkRegion: .lips
+                )
+            ],
+            faceLandmarks: landmarks
+        )
+
+        // Default apply (preserveAuthoredFinish == false) must seed unpainted face matte (B=0, G=255)
+        try stack.apply(to: mat)
+        let finishTex = try XCTUnwrap(mat.metallicRoughnessTexture?.mtlTexture)
+        let unpainted = readPixel(finishTex, x: 8, y: 16)
+        XCTAssertEqual(unpainted.b, 0, accuracy: 2, "VRoid default metallicFactor=1.0 must NOT bake metallic into unpainted face")
+        XCTAssertEqual(unpainted.g, 255, accuracy: 2, "Unpainted face must stay matte (roughness=1.0) by default")
+
+        let painted = readPixel(finishTex, x: 24, y: 16)
+        XCTAssertEqual(painted.b, 242, accuracy: 4)
+        XCTAssertEqual(painted.g, 38, accuracy: 4)
+
+        // Clearing still restores original authored factors
+        stack.clear(from: mat)
+        XCTAssertEqual(mat.metallicFactor, 1.0, accuracy: 1e-6)
+        XCTAssertEqual(mat.roughnessFactor, 0.5, accuracy: 1e-6)
     }
 }

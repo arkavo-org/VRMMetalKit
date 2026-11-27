@@ -685,12 +685,17 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
     ///   preserving the shader's `shadeUsesBaseColor` fast path.
     /// - When any visible layer has a ``VRMFinishOverride``, attaches the composited per-pixel finish map
     ///   to `material.metallicRoughnessTexture` and restores original finish state if finish layers are removed.
+    ///   By default (`preserveAuthoredFinish == false`), unpainted texels seed as matte (`roughness = 1`,
+    ///   `metallic = 0`) so VRoid/UniVRM default `metallicFactor = 1.0` exports do not turn unpainted skin metallic.
+    ///   Pass `preserveAuthoredFinish: true` to seed unpainted texels from the material's authored
+    ///   `metallicRoughnessTexture` and factors.
     public func apply(
         to material: VRMMaterial,
         slot: VRMTextureSlot = .baseColor,
         in model: VRMModel? = nil,
         width: Int? = nil,
         height: Int? = nil,
+        preserveAuthoredFinish: Bool = false,
         commandQueue: MTLCommandQueue? = nil
     ) throws {
         let key = MaterialBindingKey(materialID: ObjectIdentifier(material), slot: slot)
@@ -733,14 +738,15 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
             faceLandmarks = modelLandmarks
         }
 
+        let seedAuthored = slot == .baseColor && preserveAuthoredFinish
         let result = try compositeInternal(
             baseTexture: state.originalBaseMTLTexture,
             width: width,
             height: height,
             sRGB: true,
-            baseFinishTexture: slot == .baseColor ? state.originalMetallicRoughnessTexture?.mtlTexture : nil,
-            baseFinishMetallicFactor: slot == .baseColor ? state.originalMetallicFactor : nil,
-            baseFinishRoughnessFactor: slot == .baseColor ? state.originalRoughnessFactor : nil,
+            baseFinishTexture: seedAuthored ? state.originalMetallicRoughnessTexture?.mtlTexture : nil,
+            baseFinishMetallicFactor: seedAuthored ? state.originalMetallicFactor : nil,
+            baseFinishRoughnessFactor: seedAuthored ? state.originalRoughnessFactor : nil,
             bindingKey: key,
             commandQueue: commandQueue
         )
