@@ -494,9 +494,6 @@ public struct ARKitToVRMMapper: Sendable {
 
             for (primIndex, prim) in mesh.primitives.enumerated() where prim.morphTargetCount > 0 {
                 var vertexSet = Set<Int>()
-                let soaPtr: UnsafeMutablePointer<SIMD3<Float>>? = prim.morphPositionsSoA.map {
-                    $0.contents().bindMemory(to: SIMD3<Float>.self, capacity: prim.morphTargetCount * prim.vertexCount)
-                }
                 for bind in visemeBindsForMesh {
                     guard bind.index >= 0, bind.index < prim.morphTargetCount else { continue }
                     if let deltas = prim.morphTargets[safe: bind.index]?.positionDeltas {
@@ -505,10 +502,9 @@ public struct ARKitToVRMMapper: Sendable {
                                 vertexSet.insert(vi)
                             }
                         }
-                    } else if let soaPtr, prim.vertexCount > 0 {
-                        let baseOffset = bind.index * prim.vertexCount
+                    } else if prim.morphPositionsSoA != nil, prim.vertexCount > 0 {
                         for vi in 0..<prim.vertexCount {
-                            let delta = soaPtr[baseOffset + vi]
+                            let delta = prim.morphPositionDelta(targetIndex: bind.index, vertexIndex: vi)
                             if simd_length_squared(delta * bind.weight) > 1e-8 {
                                 vertexSet.insert(vi)
                             }
@@ -528,19 +524,11 @@ public struct ARKitToVRMMapper: Sendable {
                     let binds = expression.morphTargetBinds.filter { $0.meshIndex == primKey.meshIndex && abs($0.weight) > 1e-5 }
                     guard !binds.isEmpty else { continue }
                     let prim = model.meshes[primKey.meshIndex].primitives[primKey.primIndex]
-                    let soaPtr: UnsafeMutablePointer<SIMD3<Float>>? = prim.morphPositionsSoA.map {
-                        $0.contents().bindMemory(to: SIMD3<Float>.self, capacity: prim.morphTargetCount * prim.vertexCount)
-                    }
                     for vi in vertices {
                         var sumDelta = SIMD3<Float>.zero
                         for bind in binds {
                             guard bind.index >= 0, bind.index < prim.morphTargetCount else { continue }
-                            if let deltas = prim.morphTargets[safe: bind.index]?.positionDeltas,
-                               vi < deltas.count {
-                                sumDelta += deltas[vi] * bind.weight
-                            } else if let soaPtr, vi < prim.vertexCount {
-                                sumDelta += soaPtr[bind.index * prim.vertexCount + vi] * bind.weight
-                            }
+                            sumDelta += prim.morphPositionDelta(targetIndex: bind.index, vertexIndex: vi) * bind.weight
                         }
                         maxDisp = Swift.max(maxDisp, simd_length(sumDelta))
                     }

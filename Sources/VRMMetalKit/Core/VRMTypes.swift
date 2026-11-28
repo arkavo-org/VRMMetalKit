@@ -740,7 +740,7 @@ public enum VRMAlphaMode: String, CaseIterable, Codable, Hashable, Sendable {
 /// parameter updates avoid copying all texture references and ARC retain/release churn.
 /// Defaults match the three-vrm reference implementation. Spec:
 /// <https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_materials_mtoon-1.0/README.md>
-public final class VRMMToonMaterial: @unchecked Sendable {
+public final class VRMMToonMaterial {
     /// Linear-space shade (shadow-side) color factor.
     public var shadeColorFactor: SIMD3<Float> = [0.0, 0.0, 0.0]
     /// Optional texture multiplying ``shadeColorFactor`` per-pixel.

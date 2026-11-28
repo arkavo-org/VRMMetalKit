@@ -175,6 +175,8 @@ public final class VRMPrimitive: @unchecked Sendable {
     public var requiredPaletteSize: Int = 0
 
     internal var _morphTargetCount: Int = 0
+    internal var uploadedMorphTargetCount: Int = 0
+    internal var uploadedMorphVertexCount: Int = 0
 
     /// Number of morph targets authored on this primitive.
     public var morphTargetCount: Int {
@@ -187,14 +189,23 @@ public final class VRMPrimitive: @unchecked Sendable {
     /// Returns the position delta for `vertexIndex` in morph target `targetIndex`,
     /// reading CPU deltas when retained or falling back to the shared GPU SoA buffer.
     public func morphPositionDelta(targetIndex: Int, vertexIndex: Int) -> SIMD3<Float> {
-        guard targetIndex >= 0, targetIndex < morphTargetCount else { return .zero }
-        if let deltas = morphTargets[safe: targetIndex]?.positionDeltas, vertexIndex >= 0, vertexIndex < deltas.count {
+        guard targetIndex >= 0, vertexIndex >= 0, targetIndex < morphTargetCount else { return .zero }
+        if let deltas = morphTargets[safe: targetIndex]?.positionDeltas, vertexIndex < deltas.count {
             return deltas[vertexIndex]
         }
-        if let soa = morphPositionsSoA, vertexIndex >= 0, vertexIndex < vertexCount {
-            let total = morphTargetCount * vertexCount
-            let ptr = soa.contents().bindMemory(to: SIMD3<Float>.self, capacity: total)
-            return ptr[targetIndex * vertexCount + vertexIndex]
+        if let soa = morphPositionsSoA,
+           targetIndex < uploadedMorphTargetCount,
+           vertexIndex < uploadedMorphVertexCount {
+            let (baseOffset, overflow1) = targetIndex.multipliedReportingOverflow(by: uploadedMorphVertexCount)
+            let (elemIndex, overflow2) = baseOffset.addingReportingOverflow(vertexIndex)
+            let (elemEnd, overflow3) = elemIndex.addingReportingOverflow(1)
+            let (byteEnd, overflow4) = elemEnd.multipliedReportingOverflow(by: MemoryLayout<SIMD3<Float>>.stride)
+            guard !overflow1, !overflow2, !overflow3, !overflow4, byteEnd <= soa.length else {
+                return .zero
+            }
+            let capacity = soa.length / MemoryLayout<SIMD3<Float>>.stride
+            let ptr = soa.contents().bindMemory(to: SIMD3<Float>.self, capacity: capacity)
+            return ptr[elemIndex]
         }
         return .zero
     }
@@ -468,7 +479,11 @@ public final class VRMPrimitive: @unchecked Sendable {
             primitive._morphTargetCount = primitive.morphTargets.count
             if !primitive.morphTargets.isEmpty, let device = device {
                 primitive.createMorphTargetBuffers(device: device)
-                if !retainCPUMorphDeltas {
+                let gpuNormalsReady = !primitive.hasNormals || (primitive.morphNormalsSoA != nil && primitive.baseNormalsBuffer != nil)
+                if !retainCPUMorphDeltas,
+                   primitive.morphPositionsSoA != nil,
+                   primitive.basePositionsBuffer != nil,
+                   gpuNormalsReady {
                     for i in primitive.morphTargets.indices {
                         primitive.morphTargets[i].positionDeltas = nil
                         primitive.morphTargets[i].normalDeltas = nil
@@ -730,6 +745,11 @@ public final class VRMPrimitive: @unchecked Sendable {
     /// Allocates GPU SoA morph buffers (``morphPositionsSoA``, ``morphNormalsSoA``,
     /// ``basePositionsBuffer``, ``baseNormalsBuffer``) used by the compute morph kernel.
     public func createMorphTargetBuffers(device: MTLDevice) {
+        if morphPositionsSoA != nil,
+           !morphTargets.contains(where: { $0.positionDeltas != nil || $0.normalDeltas != nil }) {
+            vrmLog("[VRMPrimitive] Skipping createMorphTargetBuffers: CPU morph deltas were already released after GPU upload")
+            return
+        }
         _morphTargetCount = morphTargets.count
         vrmLog("[VRMPrimitive] Creating GPU SoA morph buffers for \(morphTargetCount) morph targets")
         createSoAMorphBuffers(device: device)
@@ -777,6 +797,8 @@ public final class VRMPrimitive: @unchecked Sendable {
         morphPositionsSoA = device.makeBuffer(length: totalDeltasSize, options: .storageModeShared)
         morphPositionsSoA?.label = "Morph Position Deltas SoA"
         if let soaBuffer = morphPositionsSoA {
+            uploadedMorphTargetCount = morphCount
+            uploadedMorphVertexCount = vertexCount
             let soaPointer = soaBuffer.contents().bindMemory(to: SIMD3<Float>.self, capacity: morphCount * vertexCount)
 
             // Copy morph deltas in SoA layout
@@ -986,6 +1008,8 @@ public final class VRMPrimitive: @unchecked Sendable {
         copy.hasWeights = hasWeights
         copy.requiredPaletteSize = requiredPaletteSize
         copy._morphTargetCount = morphTargetCount
+        copy.uploadedMorphTargetCount = uploadedMorphTargetCount
+        copy.uploadedMorphVertexCount = uploadedMorphVertexCount
         copy.morphTargets = morphTargets
         copy.morphPositionsSoA = morphPositionsSoA
         copy.morphNormalsSoA = morphNormalsSoA
@@ -2173,18 +2197,29 @@ public final class VRMMaterial: @unchecked Sendable {
             }
 
             // VRM 0.x: Read _ZWrite and _BlendMode from floatProperties and normalize to VRM 1.0 fields.
-            let vrm0ZWrite = (vrm0Prop.floatProperties["_ZWrite"] == 1.0)
-            var vrm0BlendMode = 0
-            if let bm = vrm0Prop.floatProperties["_BlendMode"] {
-                vrm0BlendMode = Int(bm)
+            let explicitZWrite = vrm0Prop.floatProperties["_ZWrite"].map { $0 == 1.0 }
+            if vrm0Prop.shader == "VRM/UnlitTransparentZWrite" {
+                alphaMode = .blend
+                transparentWithZWrite = explicitZWrite ?? true
+            } else if let bm = vrm0Prop.floatProperties["_BlendMode"] {
+                let vrm0BlendMode = Int(bm)
                 switch vrm0BlendMode {
-                case 0: alphaMode = .opaque
-                case 1: alphaMode = .mask
-                case 2, 3: alphaMode = .blend
-                default: alphaMode = .opaque
+                case 0:
+                    alphaMode = .opaque
+                case 1:
+                    alphaMode = .mask
+                case 2:
+                    alphaMode = .blend
+                    if explicitZWrite == true {
+                        transparentWithZWrite = true
+                    }
+                case 3:
+                    alphaMode = .blend
+                    transparentWithZWrite = true
+                default:
+                    alphaMode = .opaque
                 }
-            }
-            if vrm0BlendMode == 3 || ((alphaMode == .blend || vrm0BlendMode == 2) && vrm0ZWrite) {
+            } else if alphaMode == .blend, (explicitZWrite ?? true) {
                 transparentWithZWrite = true
             }
         } else {

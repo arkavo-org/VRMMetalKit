@@ -213,6 +213,85 @@ final class ViewingPerfAPITests: XCTestCase {
         XCTAssertEqual(prim.indexType, .uint32)
         XCTAssertNotNil(prim.indexBuffer)
     }
+
+    func testMorphPositionDeltaBoundsSafetyAndCreateMorphTargetBuffersPreservesUploadedSoA() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal device unavailable")
+        }
+        let prim = VRMPrimitive()
+        prim.uploadVertices([
+            VRMVertex(position: [0, 0, 0]),
+            VRMVertex(position: [1, 0, 0]),
+            VRMVertex(position: [0, 1, 0]),
+        ], device: device)
+        var target = VRMMorphTarget(name: "t0")
+        target.positionDeltas = [[0, 0.2, 0], [0, 0.2, 0], [0, 0.2, 0]]
+        prim.morphTargets = [target]
+        prim.createMorphTargetBuffers(device: device)
+        prim.morphTargets[0].positionDeltas = nil
+
+        // Re-invoking createMorphTargetBuffers after CPU deltas were released must not zero SoA
+        prim.createMorphTargetBuffers(device: device)
+        XCTAssertEqual(prim.morphPositionDelta(targetIndex: 0, vertexIndex: 0), SIMD3<Float>(0, 0.2, 0))
+
+        // Appending a metadata-only target must not read past SoA buffer length
+        prim.morphTargets.append(VRMMorphTarget(name: "t1_extra"))
+        XCTAssertEqual(prim.morphPositionDelta(targetIndex: 1, vertexIndex: 0), .zero)
+    }
+
+    func testMixedTypedAndStringPresetWeightsAccumulateAdditively() throws {
+        final class StringHappyLayer: AnimationLayer {
+            let identifier = "string_happy"
+            let priority = 5
+            var isEnabled = true
+            let affectedBones: Set<VRMHumanoidBone> = []
+            func update(deltaTime: Float, context: AnimationContext) {}
+            func evaluate(into output: inout LayerOutput) {
+                output.reset(blendMode: .additive)
+                output.morphWeights["happy"] = 0.25
+            }
+        }
+        final class TypedHappyLayer: AnimationLayer {
+            let identifier = "typed_happy"
+            let priority = 4
+            var isEnabled = true
+            let affectedBones: Set<VRMHumanoidBone> = []
+            func update(deltaTime: Float, context: AnimationContext) {}
+            func evaluate(into output: inout LayerOutput) {
+                output.reset(blendMode: .additive)
+                output.presetWeights[.happy] = 0.5
+            }
+        }
+
+        let doc = try JSONDecoder().decode(GLTFDocument.self, from: Data(#"{"asset":{"version":"2.0"},"nodes":[{"name":"Hips"}]}"#.utf8))
+        let model = VRMModel(specVersion: .v1_0, meta: VRMMeta(licenseUrl: "https://example.com"), humanoid: VRMHumanoid(), gltf: doc)
+        model.nodes = [VRMNode(index: 0, name: "Hips")]
+        let compositor = AnimationLayerCompositor()
+        compositor.setup(model: model)
+        compositor.addLayer(TypedHappyLayer())
+        compositor.addLayer(StringHappyLayer())
+        compositor.update(deltaTime: 0.016, context: AnimationContext(time: 0, deltaTime: 0.016))
+
+        let controller = VRMExpressionController()
+        var happy = VRMExpression(preset: .happy)
+        happy.morphTargetBinds = [VRMMorphTargetBind(node: 0, index: 0, weight: 1.0, meshIndex: 0)]
+        controller.registerExpression(happy, for: .happy)
+        compositor.applyMorphsToController(controller)
+        XCTAssertEqual(controller.weight(for: .happy), 0.75, accuracy: 1e-5)
+    }
+
+    func testVRM0UnlitTransparentZWritePreservesDepthWriteWhenZWriteOmitted() throws {
+        let gltfMat = try JSONDecoder().decode(
+            GLTFMaterial.self,
+            from: Data(#"{"name":"UnlitZW","alphaMode":"BLEND"}"#.utf8)
+        )
+        var prop = VRM0MaterialProperty()
+        prop.name = "UnlitZW"
+        prop.shader = "VRM/UnlitTransparentZWrite"
+        let mat = VRMMaterial(from: gltfMat, textures: [], vrm0MaterialProperty: prop, vrmVersion: .v0_0)
+        XCTAssertEqual(mat.alphaMode, .blend)
+        XCTAssertTrue(mat.transparentWithZWrite)
+    }
 }
 
 private extension AnimationBlendMode {

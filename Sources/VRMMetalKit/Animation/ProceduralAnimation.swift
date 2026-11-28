@@ -16,6 +16,7 @@
 
 import Foundation
 import simd
+import Synchronization
 
 // MARK: - Blend Modes
 
@@ -228,6 +229,10 @@ public final class AnimationLayerCompositor {
     /// Creates an empty compositor. Call ``setup(model:)`` before ``update(deltaTime:context:)``.
     public init() {}
 
+    private var cachedTopologyRevision: UInt64 = 0
+    private var cachedParentHierarchyRevision: UInt64 = 0
+    private var cachedNodeCount: Int = 0
+
     /// Binds the compositor to `model` and captures the model's current rotation, translation, and scale per humanoid bone as the base pose.
     ///
     /// Layer outputs are composited as deltas on top of this base pose, so
@@ -235,23 +240,36 @@ public final class AnimationLayerCompositor {
     /// moment of setup.
     public func setup(model: VRMModel) {
         self.model = model
-        boneNodes.removeAll(keepingCapacity: true)
         basePoseRotations.removeAll(keepingCapacity: true)
         basePoseTranslations.removeAll(keepingCapacity: true)
         basePoseScales.removeAll(keepingCapacity: true)
-        rootNodes = model.nodes.filter { $0.parent == nil }
+        refreshTopologyCaches(for: model)
 
         // Capture base pose rotations for all humanoid bones
         guard let humanoid = model.humanoid else { return }
         for bone in VRMHumanoidBone.allCases {
             if let nodeIndex = humanoid.getBoneNode(bone), nodeIndex < model.nodes.count {
                 let node = model.nodes[nodeIndex]
-                boneNodes[bone] = node
                 basePoseRotations[bone] = node.rotation
                 basePoseTranslations[bone] = node.translation
                 basePoseScales[bone] = node.scale
             }
         }
+    }
+
+    private func refreshTopologyCaches(for model: VRMModel) {
+        boneNodes.removeAll(keepingCapacity: true)
+        rootNodes = model.nodes.filter { $0.parent == nil }
+        if let humanoid = model.humanoid {
+            for bone in VRMHumanoidBone.allCases {
+                if let nodeIndex = humanoid.getBoneNode(bone), nodeIndex < model.nodes.count {
+                    boneNodes[bone] = model.nodes[nodeIndex]
+                }
+            }
+        }
+        cachedTopologyRevision = model.topologyRevision
+        cachedParentHierarchyRevision = VRMNode.parentHierarchyRevision.load(ordering: .relaxed)
+        cachedNodeCount = model.nodes.count
     }
 
     /// Add an animation layer (automatically sorted by priority)
@@ -362,12 +380,16 @@ public final class AnimationLayerCompositor {
             }
         }
 
-        // Morphs always accumulate additively
+        // Morphs always accumulate additively; fold preset-matching string keys into the typed map
         for (preset, value) in output.presetWeights {
             compositedPresetMorphs[preset, default: 0] += value
         }
         for (key, value) in output.morphWeights {
-            compositedMorphs[key, default: 0] += value
+            if let preset = VRMExpressionPreset(rawValue: key) {
+                compositedPresetMorphs[preset, default: 0] += value
+            } else {
+                compositedMorphs[key, default: 0] += value
+            }
         }
     }
 
@@ -388,6 +410,13 @@ public final class AnimationLayerCompositor {
     }
 
     private func applyToModel(model: VRMModel) {
+        let currentParentRev = VRMNode.parentHierarchyRevision.load(ordering: .relaxed)
+        if model.topologyRevision != cachedTopologyRevision
+            || currentParentRev != cachedParentHierarchyRevision
+            || model.nodes.count != cachedNodeCount {
+            refreshTopologyCaches(for: model)
+        }
+
         let identityRot = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
         let unitScale = SIMD3<Float>(1, 1, 1)
 
