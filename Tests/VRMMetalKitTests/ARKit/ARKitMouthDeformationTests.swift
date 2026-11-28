@@ -728,10 +728,8 @@ final class ARKitMouthDeformationTests: XCTestCase {
                 let binds = expr.morphTargetBinds.filter { $0.meshIndex == faceMeshIndex }
                 for vi in 0..<baseVerts.count {
                     var delta = SIMD3<Float>.zero
-                    for bind in binds where bind.index >= 0 && bind.index < firstPrim.morphTargets.count {
-                        if let deltas = firstPrim.morphTargets[bind.index].positionDeltas, vi < deltas.count {
-                            delta += deltas[vi] * bind.weight
-                        }
+                    for bind in binds where bind.index >= 0 && bind.index < firstPrim.morphTargetCount {
+                        delta += firstPrim.morphPositionDelta(targetIndex: bind.index, vertexIndex: vi) * bind.weight
                     }
                     let mag = simd_length(delta)
                     if mag > 1e-4 {

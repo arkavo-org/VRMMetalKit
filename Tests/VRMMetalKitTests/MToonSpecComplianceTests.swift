@@ -184,25 +184,25 @@ final class MToonSpecComplianceTests: XCTestCase {
     // MARK: - K3: pipeline depthWrite selection function
 
     func testK3_PipelineCategoryBlendZWriteTrue() {
-        let category = VRMMaterial.pipelineCategory(alphaMode: "BLEND", transparentWithZWrite: true)
+        let category = VRMMaterial.pipelineCategory(alphaMode: .blend, transparentWithZWrite: true)
         XCTAssertEqual(category, .blendZWrite,
             "BLEND+zWrite=true must use blendZWrite pipeline category (depth write enabled)")
     }
 
     func testK3_PipelineCategoryBlendZWriteFalse() {
-        let category = VRMMaterial.pipelineCategory(alphaMode: "BLEND", transparentWithZWrite: false)
+        let category = VRMMaterial.pipelineCategory(alphaMode: .blend, transparentWithZWrite: false)
         XCTAssertEqual(category, .blend,
             "BLEND+zWrite=false must use blend pipeline category (depth write disabled)")
     }
 
     func testK3_PipelineCategoryOpaque() {
-        let category = VRMMaterial.pipelineCategory(alphaMode: "OPAQUE", transparentWithZWrite: false)
+        let category = VRMMaterial.pipelineCategory(alphaMode: .opaque, transparentWithZWrite: false)
         XCTAssertEqual(category, .opaque,
             "OPAQUE must use opaque pipeline category")
     }
 
     func testK3_PipelineCategoryMask() {
-        let category = VRMMaterial.pipelineCategory(alphaMode: "MASK", transparentWithZWrite: false)
+        let category = VRMMaterial.pipelineCategory(alphaMode: .mask, transparentWithZWrite: false)
         XCTAssertEqual(category, .opaque,
             "MASK must use opaque pipeline category (depth write, no blend)")
     }

@@ -159,12 +159,11 @@ extension VRMRenderer {
                 // 1. Kill MToon's inverted-hull outline on every material —
                 //    independent of base color, so it survives the crush below
                 //    and would otherwise pop as bright artifacts.
-                if var mtoon = material.mtoon {
+                if let mtoon = material.mtoon {
                     mtoon.outlineWidthMode = .none
                     mtoon.outlineWidthFactor = 0
                     mtoon.outlineColorFactor = SIMD3<Float>(0, 0, 0)
                     mtoon.outlineLightingMixFactor = 0
-                    material.mtoon = mtoon
                 }
 
                 material.metallicFactor = 0
@@ -197,13 +196,12 @@ extension VRMRenderer {
         }
         // Lit + shade pass contributes nothing — only emissive shows.
         material.baseColorFactor = SIMD4<Float>(0, 0, 0, material.baseColorFactor.w)
-        if var mtoon = material.mtoon {
+        if let mtoon = material.mtoon {
             mtoon.shadeColorFactor = SIMD3<Float>(0, 0, 0)
             mtoon.giEqualizationFactor = 0
             mtoon.parametricRimColorFactor = SIMD3<Float>(0, 0, 0)
             mtoon.parametricRimLiftFactor = 0
             mtoon.matcapFactor = SIMD3<Float>(0, 0, 0)
-            material.mtoon = mtoon
         }
     }
 
@@ -213,13 +211,12 @@ extension VRMRenderer {
         // scene lights, independent of base albedo).
         material.baseColorFactor = SIMD4<Float>(0, 0, 0, material.baseColorFactor.w)
         material.emissiveFactor = SIMD3<Float>(0, 0, 0)
-        if var mtoon = material.mtoon {
+        if let mtoon = material.mtoon {
             mtoon.shadeColorFactor = SIMD3<Float>(0, 0, 0)
             mtoon.giEqualizationFactor = 0
             mtoon.parametricRimColorFactor = SIMD3<Float>(0, 0, 0)
             mtoon.parametricRimLiftFactor = 0
             mtoon.matcapFactor = SIMD3<Float>(0, 0, 0)
-            material.mtoon = mtoon
         }
     }
 }

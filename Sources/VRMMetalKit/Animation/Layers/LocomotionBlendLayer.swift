@@ -61,6 +61,8 @@ public final class LocomotionBlendLayer: AnimationLayer {
     /// Per-bone rest rotations captured at `setup(model:)`. Empty when no
     /// model has been bound; in that case deltas equal clip rotations.
     private var restRotations: [VRMHumanoidBone: simd_quatf] = [:]
+    private var idlePoseScratch: [VRMHumanoidBone: simd_quatf] = [:]
+    private var walkPoseScratch: [VRMHumanoidBone: simd_quatf] = [:]
 
     public init() {}
 
@@ -113,13 +115,16 @@ public final class LocomotionBlendLayer: AnimationLayer {
         return fmodf(phase + dt, duration)
     }
 
-    public func evaluate() -> LayerOutput {
-        guard let math, let idleClip, let walkClip else { return LayerOutput() }
+    public func evaluate(into output: inout LayerOutput) {
+        guard let math, let idleClip, let walkClip else {
+            output.reset()
+            return
+        }
         let blend = math.blend(forSpeed: targetSpeed)
-        var bones: [VRMHumanoidBone: ProceduralBoneTransform] = [:]
+        output.reset(blendMode: .replace)
 
-        func sample(_ clip: AnimationClip, phase: Float) -> [VRMHumanoidBone: simd_quatf] {
-            var out: [VRMHumanoidBone: simd_quatf] = [:]
+        func sample(_ clip: AnimationClip, phase: Float, into out: inout [VRMHumanoidBone: simd_quatf]) {
+            out.removeAll(keepingCapacity: true)
             let duration = max(clip.duration, 1e-5)
             // normalise phaseOffset to [0,1) so any caller-supplied value is safe
             let normalizedOffset = phaseOffset - floorf(phaseOffset)
@@ -127,29 +132,18 @@ public final class LocomotionBlendLayer: AnimationLayer {
             for track in clip.jointTracks {
                 if let q = track.rotationSampler?(t) { out[track.bone] = q }
             }
-            return out
         }
-        let idlePose = sample(idleClip, phase: idlePhase)
-        let walkPose = sample(walkClip, phase: walkPhase)
+        sample(idleClip, phase: idlePhase, into: &idlePoseScratch)
+        sample(walkClip, phase: walkPhase, into: &walkPoseScratch)
 
         let identity = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
         for bone in affectedBones {
-            // Default missing per-pose rotations to REST, not identity.
-            // Using identity here would emit `rest.inverse * identity` which
-            // snaps the bone to world-identity through the compositor when rest
-            // is non-trivial. Using rest means the delta for the missing side
-            // is `rest.inverse * rest == identity` (stay at rest) — correct.
             let rest = restRotations[bone] ?? identity
-            let qi = idlePose[bone] ?? rest
-            let qw = walkPose[bone] ?? rest
+            let qi = idlePoseScratch[bone] ?? rest
+            let qw = walkPoseScratch[bone] ?? rest
             let blended = simd_slerp(qi, qw, blend.walkWeight)
-            // Emit a rest-relative delta: compositor applies base * delta.
-            // With no model bound, rest is identity so delta == clip rotation.
             let delta = rest.inverse * blended
-            bones[bone] = ProceduralBoneTransform(rotation: delta)
+            output.bones[bone] = ProceduralBoneTransform(rotation: delta)
         }
-        // This layer IS the base-pose delta for the bones it drives; additive
-        // layers (breathing) stack on top of the compositor's result.
-        return LayerOutput(bones: bones, morphWeights: [:], blendMode: .replace)
     }
 }

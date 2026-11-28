@@ -37,7 +37,7 @@ import simd
 /// `@unchecked Sendable`. Backed by an `NSLock` protecting the cache
 /// dictionary, the pending-renders set, and the hit/miss counters. Completion
 /// handlers always fire on the supplied callback queue (default `.main`).
-public class SpriteCacheSystem: @unchecked Sendable {
+public final class SpriteCacheSystem: @unchecked Sendable {
 
     // MARK: - Cache Entry
 

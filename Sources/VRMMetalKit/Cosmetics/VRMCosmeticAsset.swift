@@ -67,7 +67,7 @@ public struct VRMCosmeticMToonFallback: Sendable, Equatable {
     )
 
     internal func apply(to material: VRMMaterial) {
-        var mtoon = VRMMToonMaterial()
+        let mtoon = VRMMToonMaterial()
         mtoon.shadeColorFactor = SIMD3<Float>(
             material.baseColorFactor.x * shadeColorMultiplier.x,
             material.baseColorFactor.y * shadeColorMultiplier.y,
@@ -275,7 +275,7 @@ public final class VRMCosmeticAsset: @unchecked Sendable {
             let gltfMat = document.materials?[safe: idx]
             let isUnlit = gltfMat?.extensions?["KHR_materials_unlit"] != nil
             if isUnlit {
-                var unlit = VRMMToonMaterial()
+                let unlit = VRMMToonMaterial()
                 unlit.shadeColorFactor = SIMD3<Float>(
                     material.baseColorFactor.x,
                     material.baseColorFactor.y,

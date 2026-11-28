@@ -169,7 +169,7 @@ final class HipSkirtTests: XCTestCase {
         
         // For MASK materials, we need alpha-to-coverage to truly fix edge aliasing
         // Depth bias only helps with true Z-fighting (coplanar surfaces)
-        if body.alphaMode.uppercased() == "MASK" && clothing.alphaMode.uppercased() == "MASK" {
+        if body.alphaMode == .mask && clothing.alphaMode == .mask {
             print("Note: Both materials use MASK alpha mode.")
             print("Edge aliasing requires alpha-to-coverage, not depth bias.")
         }

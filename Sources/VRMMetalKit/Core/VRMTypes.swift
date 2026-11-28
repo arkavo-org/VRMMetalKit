@@ -561,7 +561,7 @@ public struct VRM0MaterialProperty {
     ///
     /// - Parameter textures: Loaded model textures used to resolve VRM 0.x texture indices into direct ``VRMTexture`` references.
     public func toMToonMaterial(textures: [VRMTexture] = []) -> VRMMToonMaterial {
-        var mtoon = VRMMToonMaterial()
+        let mtoon = VRMMToonMaterial()
         let resolveTexture: (Int) -> VRMTexture? = { index in
             (index >= 0 && index < textures.count) ? textures[index] : nil
         }
@@ -689,13 +689,58 @@ public struct VRM0MaterialProperty {
 
 // MARK: - Material Types
 
+/// glTF 2.0 / VRM alpha rendering mode for a ``VRMMaterial``.
+///
+/// Mirrors the canonical glTF `alphaMode` token (`"OPAQUE"`, `"MASK"`, `"BLEND"`).
+public enum VRMAlphaMode: String, CaseIterable, Codable, Hashable, Sendable {
+    /// Fully opaque geometry with depth writes enabled.
+    case opaque = "OPAQUE"
+    /// Binary alpha cutout governed by ``VRMMaterial/alphaCutoff``.
+    case mask = "MASK"
+    /// Alpha-blended transparency (depth writes controlled by ``VRMMaterial/transparentWithZWrite``).
+    case blend = "BLEND"
+
+    /// Parses a glTF `alphaMode` string case-insensitively, defaulting to ``opaque`` for `nil` or unknown tokens.
+    public init(gltfValue: String?) {
+        guard let raw = gltfValue else {
+            self = .opaque
+            return
+        }
+        switch raw {
+        case "OPAQUE", "opaque", "Opaque":
+            self = .opaque
+        case "MASK", "mask", "Mask":
+            self = .mask
+        case "BLEND", "blend", "Blend":
+            self = .blend
+        default:
+            switch raw.uppercased() {
+            case "MASK": self = .mask
+            case "BLEND": self = .blend
+            default: self = .opaque
+            }
+        }
+    }
+
+    /// Shader uniform encoding (`0 = OPAQUE`, `1 = MASK`, `2 = BLEND`).
+    @inline(__always)
+    public var uniformRawValue: UInt32 {
+        switch self {
+        case .opaque: return 0
+        case .mask: return 1
+        case .blend: return 2
+        }
+    }
+}
+
 /// MToon 1.0 non-photorealistic material parameters as defined by the `VRMC_materials_mtoon` extension.
 ///
 /// Linear-space color factors, normalized outline width, and direct
-/// ``VRMTexture`` references. Defaults match the three-vrm reference
-/// implementation. Spec:
+/// ``VRMTexture`` references. Stored as a `final class` so reads and in-place
+/// parameter updates avoid copying all texture references and ARC retain/release churn.
+/// Defaults match the three-vrm reference implementation. Spec:
 /// <https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_materials_mtoon-1.0/README.md>
-public struct VRMMToonMaterial {
+public final class VRMMToonMaterial: @unchecked Sendable {
     /// Linear-space shade (shadow-side) color factor.
     public var shadeColorFactor: SIMD3<Float> = [0.0, 0.0, 0.0]
     /// Optional texture multiplying ``shadeColorFactor`` per-pixel.
@@ -761,6 +806,47 @@ public struct VRMMToonMaterial {
 
     /// Creates an MToon material with spec-default values.
     public init() {}
+
+    /// Creates an independent copy of this MToon parameter block, optionally remapping texture wrappers.
+    public func clone(remapTexture: (VRMTexture?) -> VRMTexture? = { $0 }) -> VRMMToonMaterial {
+        let copy = VRMMToonMaterial()
+        copy.shadeColorFactor = shadeColorFactor
+        copy.shadeMultiplyTexture = remapTexture(shadeMultiplyTexture)
+        copy.shadingShiftFactor = shadingShiftFactor
+        if let ss = shadingShiftTexture, let remapped = remapTexture(ss.texture) {
+            copy.shadingShiftTexture = VRMShadingShiftTexture(
+                texture: remapped,
+                texCoord: ss.texCoord,
+                scale: ss.scale
+            )
+        }
+        copy.shadingToonyFactor = shadingToonyFactor
+        copy.giEqualizationFactor = giEqualizationFactor
+        copy.matcapFactor = matcapFactor
+        copy.matcapTexture = remapTexture(matcapTexture)
+        copy.parametricRimColorFactor = parametricRimColorFactor
+        copy.parametricRimFresnelPowerFactor = parametricRimFresnelPowerFactor
+        copy.parametricRimLiftFactor = parametricRimLiftFactor
+        copy.rimMultiplyTexture = remapTexture(rimMultiplyTexture)
+        copy.rimLightingMixFactor = rimLightingMixFactor
+        copy.outlineWidthMode = outlineWidthMode
+        copy.outlineWidthFactor = outlineWidthFactor
+        copy.outlineWidthMultiplyTexture = remapTexture(outlineWidthMultiplyTexture)
+        copy.outlineColorFactor = outlineColorFactor
+        copy.outlineLightingMixFactor = outlineLightingMixFactor
+        copy.uvAnimationMaskTexture = remapTexture(uvAnimationMaskTexture)
+        copy.uvAnimationScrollXSpeedFactor = uvAnimationScrollXSpeedFactor
+        copy.uvAnimationScrollYSpeedFactor = uvAnimationScrollYSpeedFactor
+        copy.uvAnimationRotationSpeedFactor = uvAnimationRotationSpeedFactor
+        copy.textureTransform = textureTransform
+        copy.shadeMultiplyTextureTransform = shadeMultiplyTextureTransform
+        copy.shadingShiftTextureTransform = shadingShiftTextureTransform
+        copy.matcapTextureTransform = matcapTextureTransform
+        copy.rimMultiplyTextureTransform = rimMultiplyTextureTransform
+        copy.outlineWidthMultiplyTextureTransform = outlineWidthMultiplyTextureTransform
+        copy.uvAnimationMaskTextureTransform = uvAnimationMaskTextureTransform
+        return copy
+    }
 }
 
 /// MToon shading-shift texture reference. Provides a per-pixel override on top of ``VRMMToonMaterial/shadingShiftFactor``.

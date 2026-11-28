@@ -54,7 +54,7 @@ import simd
 /// each frame; ``verifySkinFreshness(skinIndex:frameNumber:)`` logs a
 /// warning if a draw references a palette that wasn't refreshed for the
 /// current frame.
-public class VRMSkinningSystem {
+public final class VRMSkinningSystem {
     private struct SkinSlot {
         var matrixOffset: Int
         var bufferByteOffset: Int
@@ -677,7 +677,7 @@ public class SkinnedShader {
 /// Unlike ``AnimationClip``, which lazily samples closures, `VRMAnimationState`
 /// is a flat dictionary of bone → transform applied wholesale via
 /// ``applyToModel(_:)``. Useful for hand-authored poses and test harnesses.
-public class VRMAnimationState {
+public final class VRMAnimationState {
     /// Current time in seconds for this state (informational; not used by ``applyToModel(_:)``).
     public var time: Float = 0
     /// Sparse bone-to-transform map. Bones not present are left at their current values when applied.
@@ -737,7 +737,7 @@ public class VRMAnimationState {
 /// Each factory returns a closure mapping a time in seconds to a fresh
 /// ``VRMAnimationState`` snapshot, suitable for driving test scenes without
 /// loading an authored animation file.
-public class VRMAnimationPresets {
+public final class VRMAnimationPresets {
 
     /// Returns a closure that builds a hand-waving pose over `duration` seconds.
     public static func createWaveAnimation(duration: Float = 2.0) -> (Float) -> VRMAnimationState {

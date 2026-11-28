@@ -81,7 +81,7 @@ public struct VRMNodeConstraint: Sendable {
 ///
 /// See <doc:MigratingFromVRM0> for an overview of the 0.x → 1.0 differences
 /// this type bridges.
-public class VRMExtensionParser {
+public final class VRMExtensionParser {
 
     /// Creates an empty parser. Reuse across multiple models is safe; the parser holds no per-load state.
     public init() {}

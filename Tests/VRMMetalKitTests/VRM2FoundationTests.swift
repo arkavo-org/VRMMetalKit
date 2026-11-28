@@ -364,10 +364,10 @@ final class VRM2FoundationTests: XCTestCase {
     // MARK: - 3. Spec-driven rendering default, non-MToon tint & per-view Z-sort
 
     func testSpecDrivenRenderOrderAndMovingCameraTransparentSort() throws {
-        XCTAssertEqual(VRMRenderer.specDrivenRenderOrder(alphaMode: "OPAQUE", transparentWithZWrite: false), 0)
-        XCTAssertEqual(VRMRenderer.specDrivenRenderOrder(alphaMode: "MASK", transparentWithZWrite: false), 1)
-        XCTAssertEqual(VRMRenderer.specDrivenRenderOrder(alphaMode: "BLEND", transparentWithZWrite: true), 2)
-        XCTAssertEqual(VRMRenderer.specDrivenRenderOrder(alphaMode: "BLEND", transparentWithZWrite: false), 3)
+        XCTAssertEqual(VRMRenderer.specDrivenRenderOrder(alphaMode: .opaque, transparentWithZWrite: false), 0)
+        XCTAssertEqual(VRMRenderer.specDrivenRenderOrder(alphaMode: .mask, transparentWithZWrite: false), 1)
+        XCTAssertEqual(VRMRenderer.specDrivenRenderOrder(alphaMode: .blend, transparentWithZWrite: true), 2)
+        XCTAssertEqual(VRMRenderer.specDrivenRenderOrder(alphaMode: .blend, transparentWithZWrite: false), 3)
 
         // Include legacy-triggering names ("FaceSkin_MASK", "Eyeglasses_Near", "Eyeglasses_Far")
         // to prove spec-driven default does not demote MASK or force doubleSided.
@@ -406,7 +406,7 @@ final class VRM2FoundationTests: XCTestCase {
         _ = try renderRGBA(renderer: renderer, eye: [0, 0, 5], center: [0, 0, 0])
         let summary1 = renderer.cachedRenderItemSummary
         XCTAssertEqual(summary1.map(\.renderOrder), [0, 1, 2, 3, 3])
-        XCTAssertEqual(summary1[1].effectiveAlphaMode, "mask", "Spec-driven default must NOT demote Body_Skin MASK to OPAQUE")
+        XCTAssertEqual(summary1[1].effectiveAlphaMode, .mask, "Spec-driven default must NOT demote Body_Skin MASK to OPAQUE")
         XCTAssertFalse(summary1[1].effectiveDoubleSided, "Spec-driven default must NOT force doubleSided on FaceNode")
         XCTAssertEqual(summary1[3].materialName, "Glass_A", "From +Z camera, Glass_A (z=-1) is farther and must draw before Glass_B")
         XCTAssertEqual(summary1[4].materialName, "Glass_B")

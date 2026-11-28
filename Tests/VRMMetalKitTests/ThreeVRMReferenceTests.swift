@@ -515,7 +515,7 @@ final class ThreeVRMReferenceTests: XCTestCase {
         XCTAssertEqual(initialWorldPos.y, 1.0, accuracy: 0.01, "Initial leg should be at Y=1.0")
 
         // Rotate leg bone 45° around X axis (lifting leg forward)
-        colliderNode.localRotation = simd_quatf(angle: Float.pi / 4, axis: SIMD3<Float>(1, 0, 0))
+        colliderNode.rotation = simd_quatf(angle: Float.pi / 4, axis: SIMD3<Float>(1, 0, 0))
         colliderNode.updateLocalMatrix()
         colliderNode.updateWorldTransform()
 
@@ -587,7 +587,7 @@ final class ThreeVRMReferenceTests: XCTestCase {
 
         // Rotate bone 90° around Y axis
         // This should move the offset from +Z to +X
-        boneNode.localRotation = simd_quatf(angle: Float.pi / 2, axis: SIMD3<Float>(0, 1, 0))
+        boneNode.rotation = simd_quatf(angle: Float.pi / 2, axis: SIMD3<Float>(0, 1, 0))
         boneNode.updateLocalMatrix()
         boneNode.updateWorldTransform()
 

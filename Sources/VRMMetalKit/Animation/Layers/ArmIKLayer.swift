@@ -265,8 +265,15 @@ public final class ArmIKLayer: AnimationLayer {
         pendingOutput = bones.isEmpty ? nil : LayerOutput(bones: bones, morphWeights: [:], blendMode: .blend(ikBlendWeight))
     }
 
-    public func evaluate() -> LayerOutput {
-        pendingOutput ?? LayerOutput()
+    public func evaluate(into output: inout LayerOutput) {
+        guard let pending = pendingOutput else {
+            output.reset()
+            return
+        }
+        output.reset(blendMode: pending.blendMode)
+        for (bone, transform) in pending.bones {
+            output.bones[bone] = transform
+        }
     }
 
     /// Clears targets, curls, and the pending output.

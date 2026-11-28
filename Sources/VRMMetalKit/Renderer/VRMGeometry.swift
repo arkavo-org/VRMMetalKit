@@ -33,6 +33,7 @@ private struct PrimitiveLoadJob: @unchecked Sendable {
     let document: GLTFDocument
     let device: MTLDevice?
     let bufferLoader: BufferLoader
+    let retainCPUMorphDeltas: Bool
 }
 
 /// A renderable mesh: a named container of ``VRMPrimitive`` draw calls.
@@ -40,7 +41,7 @@ private struct PrimitiveLoadJob: @unchecked Sendable {
 /// VRM meshes are loaded from glTF `meshes` entries. A node references one
 /// mesh; rendering iterates each primitive (one draw call per primitive) and
 /// applies the per-primitive material.
-public class VRMMesh: @unchecked Sendable {
+public final class VRMMesh: @unchecked Sendable {
     /// Original glTF mesh name, when present.
     public let name: String?
     /// Per-primitive draw calls owned by this mesh (one draw call per primitive).
@@ -68,51 +69,30 @@ public class VRMMesh: @unchecked Sendable {
                            document: GLTFDocument,
                            device: MTLDevice?,
                            bufferLoader: BufferLoader,
-                           concurrencyLimiter: AsyncConcurrencyLimiter? = nil) async throws -> VRMMesh {
+                           concurrencyLimiter: AsyncConcurrencyLimiter? = nil,
+                           retainCPUMorphDeltas: Bool = false) async throws -> VRMMesh {
         let mesh = VRMMesh(name: gltfMesh.name)
         let primitiveCount = gltfMesh.primitives.count
         vrmLog("[VRMMesh] Loading mesh \(gltfMesh.name ?? "unnamed") with \(primitiveCount) primitives")
 
-        // Decode primitives concurrently. Each VRMPrimitive owns independent CPU/GPU
-        // resources, and BufferLoader + the glTF document are already accessed
-        // concurrently (and read-only) by the across-mesh parallel path, so
-        // intra-mesh parallelism adds no new sharing hazard. The read-only load
-        // inputs are laundered through an `@unchecked Sendable` job holder (the same
-        // idiom ParallelMeshLoader uses) since GLTFDocument/GLTFPrimitive are not
-        // Sendable across modules. Results are reassembled in source order to keep
-        // loading deterministic (VRM models are commonly one mesh with many
-        // primitives, so this is the dominant load-time win).
         let jobs = gltfMesh.primitives.enumerated().map { index, gltfPrimitive in
             PrimitiveLoadJob(index: index, primitive: gltfPrimitive,
-                             document: document, device: device, bufferLoader: bufferLoader)
+                             document: document, device: device, bufferLoader: bufferLoader,
+                             retainCPUMorphDeltas: retainCPUMorphDeltas)
         }
-        // Two complementary, machine-scaled bounds (neither is an arbitrary cap):
-        //   1. A per-mesh sliding window sizes how many decode tasks are *created*
-        //      at once for this mesh (so a many-primitive mesh doesn't spawn
-        //      thousands of tasks). Sized to the core count; Swift's cooperative
-        //      pool already runs only core-count tasks in parallel, so this
-        //      preserves full throughput.
-        //   2. The optional `concurrencyLimiter`, shared across ALL meshes, caps how
-        //      many primitive decodes *execute* at once globally. Because this group
-        //      is itself run per-mesh inside ParallelMeshLoader's group, the levels
-        //      multiply (meshes × primitives); the shared limiter is the true global
-        //      bound on peak live memory (intermediate accessor arrays + MTLBuffers).
-        //      Only the leaf decode acquires a permit — mesh-orchestration tasks
-        //      never do — so the nesting cannot deadlock.
         let maxInFlight = max(1, min(primitiveCount, ProcessInfo.processInfo.activeProcessorCount))
         let ordered = try await withThrowingTaskGroup(of: (Int, VRMPrimitive).self) { group in
             var nextJob = 0
             func addJob(_ job: PrimitiveLoadJob) {
                 group.addTask {
-                    // If acquire throws (cancellation), no permit was taken, so the
-                    // release-balancing do/catch below is intentionally NOT entered.
                     try await concurrencyLimiter?.acquire()
                     do {
                         let primitive = try await VRMPrimitive.load(
                             from: job.primitive,
                             document: job.document,
                             device: job.device,
-                            bufferLoader: job.bufferLoader
+                            bufferLoader: job.bufferLoader,
+                            retainCPUMorphDeltas: job.retainCPUMorphDeltas
                         )
                         await concurrencyLimiter?.release()
                         return (job.index, primitive)
@@ -158,13 +138,13 @@ public class VRMMesh: @unchecked Sendable {
 /// During load, joint indices are sanitised to remove sentinel values
 /// (see ``sanitizeJoints(maxJointIndex:)``), and the local-space AABB is
 /// captured into ``localMin``/``localMax`` for frustum culling.
-public class VRMPrimitive: @unchecked Sendable {
+public final class VRMPrimitive: @unchecked Sendable {
     /// Position-only vertex buffer in ``VRMPositionVertex`` layout.
-    public var vertexBuffer: MTLBuffer?
+    public internal(set) var vertexBuffer: MTLBuffer?
     /// Normal / UV / color / joints / weights in ``VRMAttributeVertex`` layout.
-    public var attributeBuffer: MTLBuffer?
+    public internal(set) var attributeBuffer: MTLBuffer?
     /// Index buffer; `nil` for non-indexed primitives.
-    public var indexBuffer: MTLBuffer?
+    public internal(set) var indexBuffer: MTLBuffer?
     /// Number of vertices in ``vertexBuffer``.
     public var vertexCount: Int = 0
     /// Number of indices in ``indexBuffer`` (or vertices, for non-indexed primitives).
@@ -194,26 +174,42 @@ public class VRMPrimitive: @unchecked Sendable {
     /// Minimum joint palette size needed to skin this primitive (`maxJoint + 1` of the `JOINTS_0` data).
     public var requiredPaletteSize: Int = 0
 
-    /// Morph-target CPU data parsed from glTF `primitive.targets`.
+    internal var _morphTargetCount: Int = 0
+
+    /// Number of morph targets authored on this primitive.
+    public var morphTargetCount: Int {
+        max(_morphTargetCount, morphTargets.count)
+    }
+
+    /// Morph-target metadata (and optional CPU deltas when loaded with `retainCPUMorphDeltas` or `device == nil`).
     public var morphTargets: [VRMMorphTarget] = []
-    /// Per-morph-target position-delta buffers (Array-of-Structures layout, one buffer per target).
-    public var morphPositionBuffers: [MTLBuffer] = []
-    /// Per-morph-target normal-delta buffers.
-    public var morphNormalBuffers: [MTLBuffer] = []
-    /// Per-morph-target tangent-delta buffers.
-    public var morphTangentBuffers: [MTLBuffer] = []
+
+    /// Returns the position delta for `vertexIndex` in morph target `targetIndex`,
+    /// reading CPU deltas when retained or falling back to the shared GPU SoA buffer.
+    public func morphPositionDelta(targetIndex: Int, vertexIndex: Int) -> SIMD3<Float> {
+        guard targetIndex >= 0, targetIndex < morphTargetCount else { return .zero }
+        if let deltas = morphTargets[safe: targetIndex]?.positionDeltas, vertexIndex >= 0, vertexIndex < deltas.count {
+            return deltas[vertexIndex]
+        }
+        if let soa = morphPositionsSoA, vertexIndex >= 0, vertexIndex < vertexCount {
+            let total = morphTargetCount * vertexCount
+            let ptr = soa.contents().bindMemory(to: SIMD3<Float>.self, capacity: total)
+            return ptr[targetIndex * vertexCount + vertexIndex]
+        }
+        return .zero
+    }
 
     /// Structure-of-Arrays position deltas for the GPU compute morph pass.
     /// Layout: `[morph0[v0..vN], morph1[v0..vN], ...]`.
-    public var morphPositionsSoA: MTLBuffer?
+    public internal(set) var morphPositionsSoA: MTLBuffer?
     /// SoA normal deltas matching ``morphPositionsSoA``.
-    public var morphNormalsSoA: MTLBuffer?
+    public internal(set) var morphNormalsSoA: MTLBuffer?
     /// Base (rest-pose) positions copied from ``vertexBuffer`` for the compute morph pass.
-    public var basePositionsBuffer: MTLBuffer?
+    public internal(set) var basePositionsBuffer: MTLBuffer?
     /// Base (rest-pose) normals for the compute morph pass.
-    public var baseNormalsBuffer: MTLBuffer?
+    public internal(set) var baseNormalsBuffer: MTLBuffer?
 
-    /// Local-space AABB minimum corner of base positions (pre-skinning, pre-morph). Set by ``load(from:document:device:bufferLoader:)``.
+    /// Local-space AABB minimum corner of base positions (pre-skinning, pre-morph). Set by ``load(from:document:device:bufferLoader:retainCPUMorphDeltas:)``.
     public var localMin: SIMD3<Float> = SIMD3<Float>(repeating: 0)
     /// Local-space AABB maximum corner. See ``localMin``.
     public var localMax: SIMD3<Float> = SIMD3<Float>(repeating: 0)
@@ -225,7 +221,7 @@ public class VRMPrimitive: @unchecked Sendable {
     /// Populated by `VRMFirstPersonProcessor` for meshes whose annotation resolves to `.auto`.
     public var firstPersonHiddenFlags: [UInt8] = []
     /// GPU buffer mirroring ``firstPersonHiddenFlags``; bound to the vertex shader in first-person mode.
-    public var firstPersonHiddenFlagsBuffer: MTLBuffer?
+    public internal(set) var firstPersonHiddenFlagsBuffer: MTLBuffer?
 
     /// Cached one-shot joint/weight sample. Vertex skinning attributes are
     /// static after load, so the renderer must not re-walk `vertexBuffer`
@@ -260,6 +256,36 @@ public class VRMPrimitive: @unchecked Sendable {
         attributeBuffer?.label = "VRM Attributes (mat \(materialIndex.map(String.init) ?? "—"))"
     }
 
+    /// Uploads 16-bit triangle indices to the GPU index buffer.
+    public func uploadIndices(_ indices: [UInt16], device: MTLDevice) {
+        indexCount = indices.count
+        indexType = .uint16
+        indexBufferOffset = 0
+        guard !indices.isEmpty else {
+            indexBuffer = nil
+            return
+        }
+        indexBuffer = indices.withUnsafeBytes { bytes in
+            device.makeBuffer(bytes: bytes.baseAddress!, length: bytes.count, options: .storageModeShared)
+        }
+        indexBuffer?.label = "VRM Indices u16 (mat \(materialIndex.map(String.init) ?? "—"))"
+    }
+
+    /// Uploads 32-bit triangle indices to the GPU index buffer.
+    public func uploadIndices(_ indices: [UInt32], device: MTLDevice) {
+        indexCount = indices.count
+        indexType = .uint32
+        indexBufferOffset = 0
+        guard !indices.isEmpty else {
+            indexBuffer = nil
+            return
+        }
+        indexBuffer = indices.withUnsafeBytes { bytes in
+            device.makeBuffer(bytes: bytes.baseAddress!, length: bytes.count, options: .storageModeShared)
+        }
+        indexBuffer?.label = "VRM Indices u32 (mat \(materialIndex.map(String.init) ?? "—"))"
+    }
+
     /// Reconstructs interleaved ``VRMVertex`` values from the split GPU streams.
     public func interleavedVertices() -> [VRMVertex] {
         guard vertexCount > 0, let vertexBuffer else { return [] }
@@ -290,7 +316,8 @@ public class VRMPrimitive: @unchecked Sendable {
     public static func load(from gltfPrimitive: GLTFPrimitive,
                            document: GLTFDocument,
                            device: MTLDevice?,
-                           bufferLoader: BufferLoader) async throws -> VRMPrimitive {
+                           bufferLoader: BufferLoader,
+                           retainCPUMorphDeltas: Bool = false) async throws -> VRMPrimitive {
         let primitive = VRMPrimitive()
         primitive.materialIndex = gltfPrimitive.material
 
@@ -420,7 +447,6 @@ public class VRMPrimitive: @unchecked Sendable {
 
         // Load morph targets (which depend on the vertex buffer being created)
         if let gltfTargets = gltfPrimitive.targets {
-            // ... (morph target loading remains the same)
             for (targetIndex, target) in gltfTargets.enumerated() {
                 var morphTarget = VRMMorphTarget(name: "target_\(targetIndex)")
                 if let positionAccessor = target.position {
@@ -439,8 +465,16 @@ public class VRMPrimitive: @unchecked Sendable {
                 }
                 primitive.morphTargets.append(morphTarget)
             }
+            primitive._morphTargetCount = primitive.morphTargets.count
             if !primitive.morphTargets.isEmpty, let device = device {
                 primitive.createMorphTargetBuffers(device: device)
+                if !retainCPUMorphDeltas {
+                    for i in primitive.morphTargets.indices {
+                        primitive.morphTargets[i].positionDeltas = nil
+                        primitive.morphTargets[i].normalDeltas = nil
+                        primitive.morphTargets[i].tangentDeltas = nil
+                    }
+                }
             }
         }
 
@@ -693,53 +727,11 @@ public class VRMPrimitive: @unchecked Sendable {
         return !hasErrors
     }
 
-    /// Allocates GPU buffers (AoS and SoA layouts) for every morph target in ``morphTargets``.
-    ///
-    /// Call after ``morphTargets`` has been populated and before the first
-    /// frame. The renderer requires both the per-target AoS buffers
-    /// (``morphPositionBuffers``, ``morphNormalBuffers``, ``morphTangentBuffers``)
-    /// and the flattened SoA buffers (``morphPositionsSoA``, ``morphNormalsSoA``)
-    /// used by the compute morph kernel.
+    /// Allocates GPU SoA morph buffers (``morphPositionsSoA``, ``morphNormalsSoA``,
+    /// ``basePositionsBuffer``, ``baseNormalsBuffer``) used by the compute morph kernel.
     public func createMorphTargetBuffers(device: MTLDevice) {
-        morphPositionBuffers.removeAll()
-        morphNormalBuffers.removeAll()
-        morphTangentBuffers.removeAll()
-
-        for target in morphTargets {
-            // Create position delta buffer
-            if let positionDeltas = target.positionDeltas {
-                let bufferSize = positionDeltas.count * MemoryLayout<SIMD3<Float>>.stride
-                if let buffer = device.makeBuffer(bytes: positionDeltas, length: bufferSize, options: .storageModeShared) {
-                    buffer.label = "Morph Position Delta [\(morphPositionBuffers.count)]"
-                    morphPositionBuffers.append(buffer)
-                }
-            }
-
-            // Create normal delta buffer
-            if let normalDeltas = target.normalDeltas {
-                let bufferSize = normalDeltas.count * MemoryLayout<SIMD3<Float>>.stride
-                if let buffer = device.makeBuffer(bytes: normalDeltas, length: bufferSize, options: .storageModeShared) {
-                    buffer.label = "Morph Normal Delta [\(morphNormalBuffers.count)]"
-                    morphNormalBuffers.append(buffer)
-                }
-            }
-
-            // Create tangent delta buffer
-            if let tangentDeltas = target.tangentDeltas {
-                let bufferSize = tangentDeltas.count * MemoryLayout<SIMD3<Float>>.stride
-                if let buffer = device.makeBuffer(bytes: tangentDeltas, length: bufferSize, options: .storageModeShared) {
-                    buffer.label = "Morph Tangent Delta [\(morphTangentBuffers.count)]"
-                    morphTangentBuffers.append(buffer)
-                }
-            }
-        }
-
-        vrmLog("[VRMPrimitive] Created GPU buffers for \(morphTargets.count) morph targets")
-        vrmLog("  - Position buffers: \(morphPositionBuffers.count)")
-        vrmLog("  - Normal buffers: \(morphNormalBuffers.count)")
-        vrmLog("  - Tangent buffers: \(morphTangentBuffers.count)")
-
-        // Create SoA buffers for compute path if we have morph targets
+        _morphTargetCount = morphTargets.count
+        vrmLog("[VRMPrimitive] Creating GPU SoA morph buffers for \(morphTargetCount) morph targets")
         createSoAMorphBuffers(device: device)
     }
 
@@ -993,10 +985,8 @@ public class VRMPrimitive: @unchecked Sendable {
         copy.hasJoints = hasJoints
         copy.hasWeights = hasWeights
         copy.requiredPaletteSize = requiredPaletteSize
+        copy._morphTargetCount = morphTargetCount
         copy.morphTargets = morphTargets
-        copy.morphPositionBuffers = morphPositionBuffers
-        copy.morphNormalBuffers = morphNormalBuffers
-        copy.morphTangentBuffers = morphTangentBuffers
         copy.morphPositionsSoA = morphPositionsSoA
         copy.morphNormalsSoA = morphNormalsSoA
         copy.basePositionsBuffer = basePositionsBuffer
@@ -1064,29 +1054,12 @@ public class VRMPrimitive: @unchecked Sendable {
             }
         }
 
-        if !morphPositionBuffers.isEmpty && vertexCount > 0 {
-            var newBuffers: [MTLBuffer] = []
-            newBuffers.reserveCapacity(morphPositionBuffers.count)
-            for src in morphPositionBuffers {
-                let dev = device ?? src.device
-                if let dst = dev.makeBuffer(bytes: src.contents(), length: src.length, options: .storageModeShared) {
-                    dst.label = src.label
-                    let count = src.length / MemoryLayout<SIMD3<Float>>.stride
-                    let ptr = dst.contents().bindMemory(to: SIMD3<Float>.self, capacity: count)
-                    for i in 0..<count { ptr[i] *= scale }
-                    newBuffers.append(dst)
-                } else {
-                    newBuffers.append(src)
-                }
-            }
-            morphPositionBuffers = newBuffers
-        }
-
-        if let src = morphPositionsSoA, !morphTargets.isEmpty && vertexCount > 0 {
+        let effectiveMorphCount = max(morphTargetCount, morphTargets.count)
+        if let src = morphPositionsSoA, effectiveMorphCount > 0 && vertexCount > 0 {
             let dev = device ?? src.device
             if let dst = dev.makeBuffer(bytes: src.contents(), length: src.length, options: .storageModeShared) {
                 dst.label = src.label
-                let total = morphTargets.count * vertexCount
+                let total = effectiveMorphCount * vertexCount
                 let ptr = dst.contents().bindMemory(to: SIMD3<Float>.self, capacity: total)
                 for i in 0..<total {
                     ptr[i] *= scale
@@ -1305,7 +1278,7 @@ extension VRMPrimitive {
 /// ``initialRotation``, and ``initialScale`` (after VRM 0.0 → 1.0
 /// coordinate normalization, if any).  Procedural systems compute
 /// deltas against this rest pose, and ``resetToBindPose()`` restores it.
-public class VRMNode {
+public final class VRMNode {
     /// Source glTF node index; stable across loads.
     public let index: Int
     /// Source node name (often the humanoid bone name like `J_Bip_C_Head`).
@@ -1393,9 +1366,9 @@ public class VRMNode {
     /// overwritten the next time the node, or any of its ancestors, runs
     /// through ``updateWorldTransform()``. To set a stable local pose, mutate
     /// T/R/S instead.
-    public var localMatrix: float4x4 = matrix_identity_float4x4 { didSet { localMatrixDirty = true } }
+    public internal(set) var localMatrix: float4x4 = matrix_identity_float4x4 { didSet { localMatrixDirty = true } }
     /// `parent.worldMatrix * localMatrix`, recomputed by ``updateWorldTransform()``.
-    public var worldMatrix: float4x4 = matrix_identity_float4x4 {
+    public internal(set) var worldMatrix: float4x4 = matrix_identity_float4x4 {
         didSet { normalMatrixDirty = true }
     }
     private var _normalMatrix: float4x4 = matrix_identity_float4x4
@@ -1437,15 +1410,6 @@ public class VRMNode {
     /// World-space position of this node's origin, extracted from ``worldMatrix``. Used by spring-bone colliders.
     public var worldPosition: SIMD3<Float> {
         return SIMD3<Float>(worldMatrix[3][0], worldMatrix[3][1], worldMatrix[3][2])
-    }
-
-    /// Alias for ``rotation`` that automatically refreshes ``localMatrix`` on assignment.
-    public var localRotation: simd_quatf {
-        get { return rotation }
-        set {
-            rotation = newValue
-            updateLocalMatrix()
-        }
     }
 
     /// Index into the model's `meshes` array if this node draws a mesh; `nil` otherwise.
@@ -1671,7 +1635,7 @@ public class VRMNode {
 /// The renderer's ``VRMSkinningSystem`` packs every model skin's joint matrices
 /// into a single shared GPU buffer; ``bufferByteOffset`` and ``matrixOffset``
 /// record where this skin's slice begins.
-public class VRMSkin {
+public final class VRMSkin {
     /// Source skin name from glTF.
     public let name: String?
     /// Ordered joint nodes; vertex `JOINTS_0` indices reference positions in this array.
@@ -1734,7 +1698,7 @@ public class VRMSkin {
 ///
 /// Used by ``VRMMaterial`` to reference base color, normal, emissive,
 /// shade, matcap, rim, and outline-width-mask textures.
-public class VRMTexture {
+public final class VRMTexture {
     /// Decoded GPU texture; `nil` if loading failed or was deferred.
     public var mtlTexture: MTLTexture?
     /// Sampler state resolved from the source glTF sampler — wrap mode per
@@ -1846,7 +1810,7 @@ public class VRMTexture {
 /// Sorting between transparent primitives is driven by ``renderQueue`` and
 /// ``renderQueueOffset`` (see the VRM 1.0 spec for the base values: 2000 for
 /// OPAQUE, 2450 for MASK, 2510 for transparent-with-zwrite, 3000 for BLEND).
-public class VRMMaterial: @unchecked Sendable {
+public final class VRMMaterial: @unchecked Sendable {
     /// Source material name from glTF.
     public let name: String?
     /// Base color (albedo) tint applied to ``baseColorTexture``. Clamped to `[0, 1]` per the glTF 2.0 spec.
@@ -1891,19 +1855,19 @@ public class VRMMaterial: @unchecked Sendable {
     public var emissiveFactor: SIMD3<Float> = [0, 0, 0]
     /// Disables back-face culling when true.
     public var doubleSided: Bool = false
-    /// Alpha mode: `"OPAQUE"`, `"MASK"`, or `"BLEND"` (case-sensitive per the glTF spec, though parsing is tolerant).
-    public var alphaMode: String = "OPAQUE"
-    /// Alpha-cutoff threshold for ``alphaMode`` == `"MASK"`.
+    /// Alpha rendering mode (`.opaque`, `.mask`, or `.blend`).
+    public var alphaMode: VRMAlphaMode = .opaque
+    /// Alpha-cutoff threshold for ``alphaMode`` == `.mask`.
     public var alphaCutoff: Float = 0.5
 
     /// Optional MToon shading parameters; non-nil for materials with the `VRMC_materials_mtoon` extension.
     public var mtoon: VRMMToonMaterial?
 
-    /// Borrows `mtoon` in place without copying the `VRMMToonMaterial` struct or retaining its textures.
+    /// Invokes `body` with `mtoon` if present.
     @inline(__always)
-    internal func withMToon<R>(_ body: (borrowing VRMMToonMaterial) throws -> R) rethrows -> R? {
-        guard mtoon != nil else { return nil }
-        return try body(mtoon!)
+    internal func withMToon<R>(_ body: (VRMMToonMaterial) throws -> R) rethrows -> R? {
+        guard let mtoon else { return nil }
+        return try body(mtoon)
     }
 
     /// Spec version the material was authored against. VRM 0.x MToon parameters
@@ -1923,12 +1887,6 @@ public class VRMMaterial: @unchecked Sendable {
     /// Offset applied on top of the VRM-1.0 base render queue for the material's alpha mode.
     public var renderQueueOffset: Int = 0
 
-    /// VRM 0.x `_ZWrite` flag mapped to a Bool.
-    public var zWriteEnabled: Bool = true
-
-    /// VRM 0.x `_BlendMode`: `0` Opaque, `1` Cutout, `2` Transparent, `3` TransparentWithZWrite.
-    public var blendMode: Int = 0
-
     /// `KHR_texture_transform` UV transform parsed from ``baseColorTexture``'s `textureInfo` extensions.
     public var khrTextureTransform: GLTFKHRTextureTransform?
     /// `KHR_texture_transform` on ``normalTexture``'s `textureInfo`.
@@ -1945,14 +1903,14 @@ public class VRMMaterial: @unchecked Sendable {
     public func recomputeRenderQueue() {
         let clampedOffset: Int
         let base: Int
-        switch alphaMode.uppercased() {
-        case "OPAQUE":
+        switch alphaMode {
+        case .opaque:
             clampedOffset = 0
             base = 2000
-        case "MASK":
+        case .mask:
             clampedOffset = 0
             base = 2450
-        case "BLEND":
+        case .blend:
             if transparentWithZWrite {
                 clampedOffset = max(0, min(9, renderQueueOffset))
                 base = 2510
@@ -1960,9 +1918,6 @@ public class VRMMaterial: @unchecked Sendable {
                 clampedOffset = max(-9, min(9, renderQueueOffset))
                 base = 3000
             }
-        default:
-            clampedOffset = 0
-            base = 2000
         }
         renderQueueOffset = clampedOffset
         renderQueue = base + clampedOffset
@@ -1975,32 +1930,19 @@ public class VRMMaterial: @unchecked Sendable {
         shadeTintMultiplier: Float = 0.75
     ) {
         baseColorFactor = color
-        if updateShadeColor, var mtoon = mtoon {
+        if updateShadeColor, let mtoon = mtoon {
             mtoon.shadeColorFactor = SIMD3<Float>(
                 color.x * shadeTintMultiplier,
                 color.y * shadeTintMultiplier,
                 color.z * shadeTintMultiplier
             )
-            self.mtoon = mtoon
         }
     }
 
-    /// `true` when this material is transparent and writes to depth (combination of VRM 1.0 flag and VRM 0.x heuristics).
+    /// `true` when this material is transparent and writes to depth.
     /// Used by the render-item sorter to place these materials between OPAQUE and BLEND queues.
     public var isTransparentWithZWrite: Bool {
-        // Explicit flag from VRM 1.0 extension (or VRM 0.x _BlendMode == 3)
-        if transparentWithZWrite {
-            return true
-        }
-        // VRM 0.x legacy inference only (VRM 1.0 and plain glTF use explicit transparentWithZWrite)
-        if vrmVersion == .v0_0 {
-            if blendMode == 3 {
-                return true
-            }
-            let isTransparent = alphaMode.uppercased() == "BLEND" || blendMode == 2
-            return isTransparent && zWriteEnabled
-        }
-        return false
+        transparentWithZWrite
     }
 
     /// Coarse pipeline bucket used to pick between opaque and blended render-pass pipeline states.
@@ -2014,11 +1956,11 @@ public class VRMMaterial: @unchecked Sendable {
     }
 
     /// Picks a ``PipelineCategory`` from the alpha mode and the depth-write flag.
-    public static func pipelineCategory(alphaMode: String, transparentWithZWrite: Bool) -> PipelineCategory {
-        switch alphaMode.uppercased() {
-        case "BLEND":
+    public static func pipelineCategory(alphaMode: VRMAlphaMode, transparentWithZWrite: Bool) -> PipelineCategory {
+        switch alphaMode {
+        case .blend:
             return transparentWithZWrite ? .blendZWrite : .blend
-        default:
+        case .opaque, .mask:
             return .opaque
         }
     }
@@ -2045,28 +1987,12 @@ public class VRMMaterial: @unchecked Sendable {
         self.renderQueue = other.renderQueue
         self.transparentWithZWrite = other.transparentWithZWrite
         self.renderQueueOffset = other.renderQueueOffset
-        self.zWriteEnabled = other.zWriteEnabled
-        self.blendMode = other.blendMode
         self.khrTextureTransform = other.khrTextureTransform
         self.normalTextureTransform = other.normalTextureTransform
         self.occlusionTextureTransform = other.occlusionTextureTransform
         self.emissiveTextureTransform = other.emissiveTextureTransform
         self.metallicRoughnessTextureTransform = other.metallicRoughnessTextureTransform
-        if var clonedMToon = other.mtoon {
-            clonedMToon.shadeMultiplyTexture = remapTexture(clonedMToon.shadeMultiplyTexture)
-            if let ss = clonedMToon.shadingShiftTexture, let remapped = remapTexture(ss.texture) {
-                clonedMToon.shadingShiftTexture = VRMShadingShiftTexture(
-                    texture: remapped,
-                    texCoord: ss.texCoord,
-                    scale: ss.scale
-                )
-            }
-            clonedMToon.matcapTexture = remapTexture(clonedMToon.matcapTexture)
-            clonedMToon.rimMultiplyTexture = remapTexture(clonedMToon.rimMultiplyTexture)
-            clonedMToon.outlineWidthMultiplyTexture = remapTexture(clonedMToon.outlineWidthMultiplyTexture)
-            clonedMToon.uvAnimationMaskTexture = remapTexture(clonedMToon.uvAnimationMaskTexture)
-            self.mtoon = clonedMToon
-        }
+        self.mtoon = other.mtoon?.clone(remapTexture: remapTexture)
     }
 
     /// Builds a material from glTF + optional VRM 0.x material property block.
@@ -2182,7 +2108,7 @@ public class VRMMaterial: @unchecked Sendable {
         }
 
         doubleSided = gltfMaterial.doubleSided ?? false
-        alphaMode = gltfMaterial.alphaMode ?? "OPAQUE"
+        alphaMode = VRMAlphaMode(gltfValue: gltfMaterial.alphaMode)
         alphaCutoff = gltfMaterial.alphaCutoff ?? 0.5
 
         // Parse MToon extension if present
@@ -2200,13 +2126,13 @@ public class VRMMaterial: @unchecked Sendable {
             if let rqOffset = mtoonExt["renderQueueOffsetNumber"] as? Int {
                 // Clamp offset to spec-defined ranges per alphaMode / transparentWithZWrite
                 let clampedOffset: Int
-                switch alphaMode.uppercased() {
-                case "OPAQUE", "MASK":
+                switch alphaMode {
+                case .opaque, .mask:
                     if rqOffset != 0 {
-                        vrmLog("[VRMMaterial] renderQueueOffsetNumber \(rqOffset) ignored for \(alphaMode) (spec requires 0)")
+                        vrmLog("[VRMMaterial] renderQueueOffsetNumber \(rqOffset) ignored for \(alphaMode.rawValue) (spec requires 0)")
                     }
                     clampedOffset = 0
-                case "BLEND":
+                case .blend:
                     if transparentWithZWrite {
                         if rqOffset < 0 || rqOffset > 9 {
                             vrmLog("[VRMMaterial] renderQueueOffsetNumber \(rqOffset) clamped to [0,9] for BLEND+zWrite=true")
@@ -2218,8 +2144,6 @@ public class VRMMaterial: @unchecked Sendable {
                         }
                         clampedOffset = max(-9, min(9, rqOffset))
                     }
-                default:
-                    clampedOffset = 0
                 }
                 renderQueueOffset = clampedOffset
             }
@@ -2248,34 +2172,20 @@ public class VRMMaterial: @unchecked Sendable {
                 renderQueue = queue
             }
 
-            // VRM 0.x: Read _ZWrite and _BlendMode from floatProperties
-            // _ZWrite: 1 = writes to depth, 0 = no depth write
-            if let zWrite = vrm0Prop.floatProperties["_ZWrite"] {
-                zWriteEnabled = (zWrite == 1.0)
-            }
-            // _BlendMode: 0=Opaque, 1=Cutout, 2=Transparent, 3=TransparentWithZWrite
+            // VRM 0.x: Read _ZWrite and _BlendMode from floatProperties and normalize to VRM 1.0 fields.
+            let vrm0ZWrite = (vrm0Prop.floatProperties["_ZWrite"] == 1.0)
+            var vrm0BlendMode = 0
             if let bm = vrm0Prop.floatProperties["_BlendMode"] {
-                blendMode = Int(bm)
-                // Map VRM 0.x _BlendMode to glTF alphaMode for pipeline selection.
-                // Without this, materials authored as Transparent (e.g.
-                // AliciaSolid's bangs at _BlendMode=3) stay as glTF "OPAQUE" and
-                // render without alpha blending.
-                switch blendMode {
-                case 0: alphaMode = "OPAQUE"
-                case 1: alphaMode = "MASK"
-                case 2, 3: alphaMode = "BLEND"
-                default: alphaMode = "OPAQUE"
+                vrm0BlendMode = Int(bm)
+                switch vrm0BlendMode {
+                case 0: alphaMode = .opaque
+                case 1: alphaMode = .mask
+                case 2, 3: alphaMode = .blend
+                default: alphaMode = .opaque
                 }
-                // VMK#265: _BlendMode = 3 is TransparentWithZWrite — the VRM 0.x
-                // equivalent of VRM 1.0's `alphaMode: BLEND` +
-                // `VRMC_materials_mtoon.transparentWithZWrite: true`. Set the
-                // explicit field so direct readers see the same value as the
-                // VRM 1.0 native path; the `isTransparentWithZWrite` computed
-                // property's `blendMode == 3` fallback stays as a belt-and-
-                // braces guard but is no longer load-bearing.
-                if blendMode == 3 {
-                    transparentWithZWrite = true
-                }
+            }
+            if vrm0BlendMode == 3 || ((alphaMode == .blend || vrm0BlendMode == 2) && vrm0ZWrite) {
+                transparentWithZWrite = true
             }
         } else {
             recomputeRenderQueue()
@@ -2311,7 +2221,7 @@ public class VRMMaterial: @unchecked Sendable {
     }
 
     private func parseMToonExtension(_ mtoonExt: [String: Any], textures: [VRMTexture]) -> VRMMToonMaterial {
-        var mtoon = VRMMToonMaterial()
+        let mtoon = VRMMToonMaterial()
 
         // Shade color factor
         if let shadeColorFactor = floatArray(from: mtoonExt["shadeColorFactor"], count: 3) {

@@ -37,7 +37,8 @@ public final class ParallelMeshLoader: @unchecked Sendable {
         device: MTLDevice?,
         document: GLTFDocument,
         bufferLoader: BufferLoader,
-        concurrencyLimiter: AsyncConcurrencyLimiter? = nil
+        concurrencyLimiter: AsyncConcurrencyLimiter? = nil,
+        retainCPUMorphDeltas: Bool = false
     ) {
         self.inner = GLTFParallelMeshLoader<VRMMesh>(
             device: device,
@@ -52,7 +53,8 @@ public final class ParallelMeshLoader: @unchecked Sendable {
                     document: document,
                     device: device,
                     bufferLoader: bufferLoader,
-                    concurrencyLimiter: concurrencyLimiter
+                    concurrencyLimiter: concurrencyLimiter,
+                    retainCPUMorphDeltas: retainCPUMorphDeltas
                 )
             }
         )

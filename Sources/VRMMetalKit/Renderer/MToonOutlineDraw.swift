@@ -45,23 +45,18 @@ public enum MToonOutlineDraw {
     /// so both faces stay visible on the color draw.
     public static func shouldMerge(
         globalOutlineWidth: Float,
-        mtoon: borrowing VRMMToonMaterial?,
+        mtoon: VRMMToonMaterial?,
         isDoubleSided: Bool
     ) -> Bool {
-        guard globalOutlineWidth > 0, !isDoubleSided else {
+        guard globalOutlineWidth > 0, !isDoubleSided, let value = mtoon else {
             return false
         }
-        switch mtoon {
-        case .none:
-            return false
-        case .some(let value):
-            return shouldMerge(
-                globalOutlineWidth: globalOutlineWidth,
-                outlineWidthMode: value.outlineWidthMode,
-                outlineWidthFactor: value.outlineWidthFactor,
-                isDoubleSided: isDoubleSided
-            )
-        }
+        return shouldMerge(
+            globalOutlineWidth: globalOutlineWidth,
+            outlineWidthMode: value.outlineWidthMode,
+            outlineWidthFactor: value.outlineWidthFactor,
+            isDoubleSided: isDoubleSided
+        )
     }
 
     @inline(__always)

@@ -1078,19 +1078,19 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// - `1`: `MASK`
     /// - `2`: `BLEND` with `transparentWithZWrite`
     /// - `3`: `BLEND` without Z-write (sorted back-to-front per view by `viewZ`)
-    public static func specDrivenRenderOrder(alphaMode: String, transparentWithZWrite: Bool) -> Int {
-        switch alphaMode.lowercased() {
-        case "mask":
-            return 1
-        case "blend":
-            return transparentWithZWrite ? 2 : 3
-        default:
+    public static func specDrivenRenderOrder(alphaMode: VRMAlphaMode, transparentWithZWrite: Bool) -> Int {
+        switch alphaMode {
+        case .opaque:
             return 0
+        case .mask:
+            return 1
+        case .blend:
+            return transparentWithZWrite ? 2 : 3
         }
     }
 
     /// Snapshot of the most recently sorted render items for white-box tests.
-    internal var cachedRenderItemSummary: [(materialName: String, renderOrder: Int, effectiveAlphaMode: String, effectiveDoubleSided: Bool, renderQueue: Int)] {
+    internal var cachedRenderItemSummary: [(materialName: String, renderOrder: Int, effectiveAlphaMode: VRMAlphaMode, effectiveDoubleSided: Bool, renderQueue: Int)] {
         (cachedRenderItems ?? []).map {
             ($0.materialName, $0.renderOrder, $0.effectiveAlphaMode, $0.effectiveDoubleSided, $0.materialRenderQueue)
         }
@@ -1158,12 +1158,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     ///   stops the semi-transparent eyelash bleeding through gaps in the bangs (#322).
     /// - `4` transparent-band MASK (`renderQueue >= 2500`) — kept in the later slot.
     /// - `7` blend (true transparency)
-    static func nonFaceRenderOrder(alphaMode: String, renderQueue: Int) -> Int {
+    static func nonFaceRenderOrder(alphaMode: VRMAlphaMode, renderQueue: Int) -> Int {
         switch alphaMode {
-        case "opaque": return 0
-        case "mask":   return renderQueue < 2500 ? 1 : 4
-        case "blend":  return 7
-        default:       return 0
+        case .opaque: return 0
+        case .mask:   return renderQueue < 2500 ? 1 : 4
+        case .blend:  return 7
         }
     }
 
@@ -1175,10 +1174,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         let node: VRMNode
         let mesh: VRMMesh
         let primitive: VRMPrimitive
-        let alphaMode: String  // Original material alpha mode
+        let alphaMode: VRMAlphaMode  // Original material alpha mode
         let materialName: String
         let meshIndex: Int
-        var effectiveAlphaMode: String  // Override-able alpha mode
+        var effectiveAlphaMode: VRMAlphaMode  // Override-able alpha mode
         var effectiveDoubleSided: Bool  // Override-able double sided
         var effectiveAlphaCutoff: Float  // Override-able alpha cutoff for MASK mode
         var faceCategory: String?  // Face sub-category: skin, eyebrow, eyeline, eye, highlight
@@ -1212,10 +1211,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             node: VRMNode,
             mesh: VRMMesh,
             primitive: VRMPrimitive,
-            alphaMode: String,
+            alphaMode: VRMAlphaMode,
             materialName: String,
             meshIndex: Int,
-            effectiveAlphaMode: String,
+            effectiveAlphaMode: VRMAlphaMode,
             effectiveDoubleSided: Bool,
             effectiveAlphaCutoff: Float,
             faceCategory: String?,
@@ -2644,7 +2643,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         let material = primitive.materialIndex.flatMap { idx in
                             (idx >= 0 && idx < content.materials.count) ? content.materials[idx] : nil
                         }
-                        let alphaMode = material?.alphaMode.lowercased() ?? "opaque"
+                        let alphaMode = material?.alphaMode ?? .opaque
                         let materialName = material?.name ?? "unnamed"
                         let nodeName = node.name ?? "unnamed"
                         let meshName = mesh.name ?? "unnamed_mesh"
@@ -2711,14 +2710,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
                             if nodeOrMeshIsFace {
                                 item.effectiveDoubleSided = true
-                                if let material, item.materialNameLower.contains("skin") && item.effectiveAlphaMode == "mask" {
+                                if let material, item.materialNameLower.contains("skin") && item.effectiveAlphaMode == .mask {
                                     item.effectiveAlphaCutoff = max(0.5, material.alphaCutoff)
                                 }
                             }
 
                             let isBodyOrSkinMaterial = materialNameLower.contains("body") || materialNameLower.contains("skin")
-                            if isBodyOrSkinMaterial && !item.isFaceMaterial && item.effectiveAlphaMode == "mask" {
-                                item.effectiveAlphaMode = "opaque"
+                            if isBodyOrSkinMaterial && !item.isFaceMaterial && item.effectiveAlphaMode == .mask {
+                                item.effectiveAlphaMode = .opaque
                             }
 
                             if item.isFaceMaterial {
@@ -2767,10 +2766,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
                                 switch item.faceCategory {
                                 case "eye":
-                                    item.effectiveAlphaMode = "opaque"
+                                    item.effectiveAlphaMode = .opaque
                                     item.effectiveDoubleSided = true
                                 case "highlight":
-                                    item.effectiveAlphaMode = "blend"
+                                    item.effectiveAlphaMode = .blend
                                     item.effectiveDoubleSided = true
                                 case "eyeline", "eyebrow":
                                     item.effectiveDoubleSided = true
@@ -2781,9 +2780,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                                 item.renderOrder = VRMRenderer.nonFaceRenderOrder(
                                     alphaMode: item.effectiveAlphaMode, renderQueue: materialRenderQueue)
                                 switch item.effectiveAlphaMode {
-                                case "mask": maskCount += 1
-                                case "blend": blendCount += 1
-                                default: opaqueCount += 1
+                                case .mask: maskCount += 1
+                                case .blend: blendCount += 1
+                                case .opaque: opaqueCount += 1
                                 }
                             }
                         } else {
@@ -2820,17 +2819,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                                 primIdxInMesh: primIdxInMesh
                             )
                             switch alphaMode {
-                            case "mask": maskCount += 1
-                            case "blend": blendCount += 1
-                            default: opaqueCount += 1
+                            case .mask: maskCount += 1
+                            case .blend: blendCount += 1
+                            case .opaque: opaqueCount += 1
                             }
                         }
 
-                        switch item.effectiveAlphaMode {
-                        case "mask": item.effectiveAlphaModeRaw = 1
-                        case "blend": item.effectiveAlphaModeRaw = 2
-                        default: item.effectiveAlphaModeRaw = 0
-                        }
+                        item.effectiveAlphaModeRaw = item.effectiveAlphaMode.uniformRawValue
                         item.selectedCullMode = selectCullMode(
                             faceCategory: item.faceCategory,
                             alphaMode: item.effectiveAlphaMode,
@@ -3145,10 +3140,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 let indexTypeStr = prim.indexType == .uint16 ? "u16" : "u32"
                 let psoLabel: String
                 switch item.effectiveAlphaMode {
-                case "opaque": psoLabel = "opaque"
-                case "mask": psoLabel = "mask"
-                case "blend": psoLabel = "blend"
-                default: psoLabel = "unknown"
+                case .opaque: psoLabel = "opaque"
+                case .mask: psoLabel = "mask"
+                case .blend: psoLabel = "blend"
                 }
                 vrmLog("[DRAW] i=\(drawIndex) mesh='\(meshName)' prim=\(meshPrimIndex) mat='\(materialName)' mode=\(modeStr) idx=\(indexTypeStr)/\(prim.indexBufferOffset)/\(prim.indexCount) skin=\(skinIdxStr)/\(paletteCountStr)/0 pso=\(psoLabel) pos_slot=\(positionSlot)")
             }
@@ -3303,10 +3297,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             let materialAlphaMode = item.effectiveAlphaMode
             let isDoubleSided = item.effectiveDoubleSided
 
-            // Contract validation: effective alpha mode should be valid
-            precondition(materialAlphaMode == "opaque" || materialAlphaMode == "mask" || materialAlphaMode == "blend",
-                        "Invalid effective alpha mode: \(materialAlphaMode)")
-
             // Choose pipeline based on skinning AND alpha mode
             let nodeHasSkin = item.node.skin != nil
 
@@ -3368,11 +3358,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             if frameCounter <= 2 || (frameCounter % 180 == 0 && item.materialNameLower.contains("body")) {
                 let psoType: String
                 if isSkinned {
-                    psoType = materialAlphaMode == "blend" ? "SKINNED_BLEND_PSO" : "SKINNED_OPAQUE_PSO"
+                    psoType = materialAlphaMode == .blend ? "SKINNED_BLEND_PSO" : "SKINNED_OPAQUE_PSO"
                 } else {
-                    psoType = materialAlphaMode == "blend" ? "BLEND_PSO" : "OPAQUE_PSO"
+                    psoType = materialAlphaMode == .blend ? "BLEND_PSO" : "OPAQUE_PSO"
                 }
-                let depthWrite = materialAlphaMode != "blend"
+                let depthWrite = materialAlphaMode != .blend
                 vrmLog("[DRAW CALL] Mesh: \(item.mesh.name ?? "unnamed"), Material: \(item.materialName)")
                 vrmLog("  - Alpha: \(materialAlphaMode), PSO: \(psoType), DepthWrite: \(depthWrite)")
                 let worldPos = item.node.worldMatrix.columns.3
@@ -3959,7 +3949,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     // accessory writes depth only when it authors
                     // `transparentWithZWrite`, and culling follows `doubleSided`.
                     let depthStateKey: String
-                    if materialAlphaMode == "blend" {
+                    if materialAlphaMode == .blend {
                         let writesDepth = drawMaterial?.transparentWithZWrite ?? false
                         depthStateKey = writesDepth ? "blendZWrite" : "blend"
                     } else {
@@ -3986,7 +3976,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 let baseBias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: false)
                 
                 switch materialAlphaMode {
-                case "opaque":
+                case .opaque:
                     // After a depth prepass, opaque depth is already written: test
                     // `.lessEqual` and don't re-write (early-Z). Otherwise the
                     // standard `.less` + write.
@@ -3996,14 +3986,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     applyDepthBias(encoder, baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
 
-                case "mask":
+                case .mask:
                     encoderStateCache.setDepthStencilState(encoder,depthStencilStates["mask"])
                     encoderStateCache.setCullMode(encoder,selectedCullMode)
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply base depth bias for MASK materials
                     applyDepthBias(encoder, baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
 
-                case "blend":
+                case .blend:
                     let writesDepth = drawMaterial?.isTransparentWithZWrite ?? false
                     if let blendDepthState = depthStencilStates[writesDepth ? "blendZWrite" : "blend"] {
                         encoderStateCache.setDepthStencilState(encoder,blendDepthState)
@@ -4012,11 +4002,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                     encoderStateCache.setCullMode(encoder,selectedCullMode)
                     // Apply base depth bias for BLEND materials
-                    applyDepthBias(encoder, baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
-
-                default:
-                    encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
-                    encoderStateCache.setCullMode(encoder,selectedCullMode)
                     applyDepthBias(encoder, baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
                 }
             }
@@ -4077,7 +4062,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
             if mtoonUniforms.alphaMode == 1, !usesDebugFrag {
                 mtoonUniforms.alphaMode = alphaModeForUniform(
-                    alphaMode: "mask",
+                    alphaMode: .mask,
                     isSkinned: isSkinned
                 )
             }
@@ -4188,7 +4173,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 // Normal production render path
                     if frameCounter < 2 {  // Only log first couple frames
                         vrmLog("[SHADER PATH DEBUG] Frame \(frameCounter): USING PRODUCTION RENDERER (mtoon_fragment_v2)")
-                        vrmLog("[SHADER PATH DEBUG]   - pipeline = \(isSkinned ? "skinned" : "static") \(materialAlphaMode != "blend" ? "opaque" : "blend")")
+                        vrmLog("[SHADER PATH DEBUG]   - pipeline = \(isSkinned ? "skinned" : "static") \(materialAlphaMode != .blend ? "opaque" : "blend")")
                         vrmLog("[SHADER PATH DEBUG]   - debugUVs uniform = \(uniforms.debugUVs)")
                     }
                     // Texture binding verification in strict mode
@@ -4202,7 +4187,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                             }
 
                             // Verify alpha mode consistency
-                            if material.alphaMode.lowercased() == "opaque" && material.baseColorFactor.w < 0.99 {
+                            if material.alphaMode == .opaque && material.baseColorFactor.w < 0.99 {
                                 let message = "OPAQUE material has alpha < 1.0: \(material.baseColorFactor.w)"
                                 vrmLog("⚠️ [StrictMode] \(message)")
                             }
@@ -4820,7 +4805,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         for item in itemsToRender {
             if item.attachment?.isHidden == true || item.primitive.isHidden || item.node.isEffectivelyHidden { continue }
             // v1: opaque, non-face only. Blend/mask/face keep current behavior.
-            guard item.effectiveAlphaMode == "opaque", !item.isFaceMaterial else { continue }
+            guard item.effectiveAlphaMode == .opaque, !item.isFaceMaterial else { continue }
             let primitive = item.primitive
             guard let vertexBuffer = primitive.vertexBuffer,
                   let indexBuffer = primitive.indexBuffer else { continue }
@@ -5063,7 +5048,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         hairHighlightMaterialsKey = (key, topoRev, hair)
     }
 
-    private func baseMToonUniforms(material: VRMMaterial, mtoon: borrowing VRMMToonMaterial) -> MToonMaterialUniforms {
+    private func baseMToonUniforms(material: VRMMaterial, mtoon: VRMMToonMaterial) -> MToonMaterialUniforms {
         let id = ObjectIdentifier(material)
         if let cached = baseMToonUniformsByMaterial[id] { return cached }
         let uniforms = MToonMaterialUniforms(from: mtoon)
@@ -5527,7 +5512,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// the production fragment (``MToonDebugMode``) take the ordinary path.
     func specializedMToonPipelineIfAvailable(
         isSkinned: Bool,
-        materialAlphaMode: String,
+        materialAlphaMode: VRMAlphaMode,
         mtoonUniforms: MToonMaterialUniforms
     ) -> MTLRenderPipelineState? {
         let lightCount = MToonLightSpecialization.count(
@@ -5546,7 +5531,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
     private func specializedMToonPipelineIfAvailable(
         isSkinned: Bool,
-        materialAlphaMode: String,
+        materialAlphaMode: VRMAlphaMode,
         mtoonUniforms: MToonMaterialUniforms,
         lightCount: UInt8,
         usesDebugFragment: Bool
@@ -5559,7 +5544,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             return specializedMToonPipelineState(isSkinned: isSkinned, features: features)
         }
 
-        let usingA2C = materialAlphaMode == "mask" && config.alphaToCoverageForMASK && usesMultisampling
+        let usingA2C = materialAlphaMode == .mask && config.alphaToCoverageForMASK && usesMultisampling
         guard !usingA2C, mtoonUniforms.alphaMode <= 2 else { return nil }
         guard config.enableMToonFunctionConstants else { return nil }
         return specializedMToonPipelineState(isSkinned: isSkinned, features: features)
@@ -5574,7 +5559,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// alpha-to-coverage pipeline instead — a quality extension that drifts
     /// from reference rendering.
     public func selectPipelineForDraw(
-        alphaMode: String,
+        alphaMode: VRMAlphaMode,
         isSkinned: Bool,
         debugWireframe: Bool
     ) -> MTLRenderPipelineState? {
@@ -5582,12 +5567,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             return wireframePipelineState
         }
         switch alphaMode {
-        case "blend":
+        case .blend:
             return isSkinned ? skinnedBlendPipelineState : blendPipelineState
-        case "mask" where config.alphaToCoverageForMASK && usesMultisampling:
+        case .mask where config.alphaToCoverageForMASK && usesMultisampling:
             let a2c = isSkinned ? skinnedMaskAlphaToCoveragePipelineState : maskAlphaToCoveragePipelineState
             return a2c ?? (isSkinned ? skinnedOpaquePipelineState : opaquePipelineState)
-        default:
+        case .opaque, .mask:
             return isSkinned ? skinnedOpaquePipelineState : opaquePipelineState
         }
     }
@@ -5609,7 +5594,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     ///   `doubleSided` flag.
     public func selectCullMode(
         faceCategory: String?,
-        alphaMode: String,
+        alphaMode: VRMAlphaMode,
         isDoubleSided: Bool
     ) -> MTLCullMode {
         let solidCull: MTLCullMode = isDoubleSided ? .none : .back
@@ -5636,34 +5621,21 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// so remapping to `3` here keeps the fragment alive while still
     /// signalling "this is a MASK material" to downstream logic.
     public func alphaModeForUniform(
-        alphaMode: String,
+        alphaMode: VRMAlphaMode,
         isSkinned: Bool
     ) -> UInt32 {
-        // Fast path: canonical tokens; fall back to lowercasing once for non-standard inputs.
         switch alphaMode {
-        case "blend", "Blend", "BLEND":
+        case .opaque:
+            return 0
+        case .blend:
             return 2
-        case "mask", "Mask", "MASK":
+        case .mask:
             let usingA2CPipeline =
                 config.alphaToCoverageForMASK && usesMultisampling &&
                 (isSkinned
                     ? skinnedMaskAlphaToCoveragePipelineState != nil
                     : maskAlphaToCoveragePipelineState != nil)
             return usingA2CPipeline ? 3 : 1
-        default:
-            switch alphaMode.lowercased() {
-            case "blend":
-                return 2
-            case "mask":
-                let usingA2CPipeline =
-                    config.alphaToCoverageForMASK && usesMultisampling &&
-                    (isSkinned
-                        ? skinnedMaskAlphaToCoveragePipelineState != nil
-                        : maskAlphaToCoveragePipelineState != nil)
-                return usingA2CPipeline ? 3 : 1
-            default:
-                return 0
-            }
         }
     }
 

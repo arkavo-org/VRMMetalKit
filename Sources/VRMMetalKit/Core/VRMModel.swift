@@ -52,7 +52,7 @@ import Metal
 /// ```
 ///
 /// - SeeAlso: ``VRMRenderer``, ``VRMLoadingOptions``, ``VRMError``.
-public class VRMModel: VRMSceneContent, @unchecked Sendable {
+public final class VRMModel: VRMSceneContent, @unchecked Sendable {
     // MARK: - Thread Safety
     let lock = NSLock()
 
@@ -169,9 +169,6 @@ public class VRMModel: VRMSceneContent, @unchecked Sendable {
                     appendIfNew(primitive.vertexBuffer)
                     appendIfNew(primitive.attributeBuffer)
                     appendIfNew(primitive.indexBuffer)
-                    for buffer in primitive.morphPositionBuffers { appendIfNew(buffer) }
-                    for buffer in primitive.morphNormalBuffers { appendIfNew(buffer) }
-                    for buffer in primitive.morphTangentBuffers { appendIfNew(buffer) }
                     appendIfNew(primitive.morphPositionsSoA)
                     appendIfNew(primitive.morphNormalsSoA)
                     appendIfNew(primitive.basePositionsBuffer)
@@ -1428,7 +1425,7 @@ public class VRMModel: VRMSceneContent, @unchecked Sendable {
 /// ## Required Bones
 /// VRM requires these bones: hips, spine, head, and all arm/leg bones.
 /// Use `validate()` to check if all required bones are present.
-public class VRMHumanoid {
+public final class VRMHumanoid {
     /// Maps humanoid bone types to their node references.
     public var humanBones: [VRMHumanoidBone: VRMHumanBone] = [:]
 
@@ -1477,7 +1474,7 @@ public class VRMHumanoid {
 ///
 /// Defines which meshes should be visible or hidden when rendering from the avatar's
 /// perspective. This prevents the avatar's head from blocking the camera view.
-public class VRMFirstPerson {
+public final class VRMFirstPerson {
     /// Mesh visibility annotations for first-person rendering.
     public var meshAnnotations: [VRMMeshAnnotation] = []
 
@@ -1503,7 +1500,7 @@ public class VRMFirstPerson {
 ///
 /// Defines how the avatar's eyes track a target point, including the offset from the
 /// head bone and range limits for horizontal and vertical eye movement.
-public class VRMLookAt {
+public final class VRMLookAt {
     /// The method used to control gaze (bone rotation or blend shapes).
     public var type: VRMLookAtType = .bone
 
@@ -1543,7 +1540,7 @@ public class VRMLookAt {
 ///     // Apply custom expression
 /// }
 /// ```
-public class VRMExpressions {
+public final class VRMExpressions {
     /// Standard VRM expressions (happy, angry, sad, surprised, blink, etc.).
     public var preset: [VRMExpressionPreset: VRMExpression] = [:]
 

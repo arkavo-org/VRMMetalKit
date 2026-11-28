@@ -203,7 +203,7 @@ final class RenderOrderTests: XCTestCase {
     /// Pre-#322 this was renderOrder 4, drawing alpha-tested hair AFTER the BLEND
     /// eyeline (queue ~2998) and letting the eyelash bleed through the bangs.
     func testCutoutMaskSortsBeforeFaceBlendOverlays() {
-        let hair = VRMRenderer.nonFaceRenderOrder(alphaMode: "mask", renderQueue: 2450)
+        let hair = VRMRenderer.nonFaceRenderOrder(alphaMode: .mask, renderQueue: 2450)
         let faceEyeline = 3
         XCTAssertEqual(hair, 1, "Cutout-band hair (queue 2450) sorts in the early depth band")
         XCTAssertLessThan(hair, faceEyeline,
@@ -212,8 +212,8 @@ final class RenderOrderTests: XCTestCase {
 
     /// Transparent-band MASK (queue >= 2500) keeps the later slot (4).
     func testTransparentBandMaskKeepsLateSlot() {
-        XCTAssertEqual(VRMRenderer.nonFaceRenderOrder(alphaMode: "mask", renderQueue: 2998), 4)
-        XCTAssertEqual(VRMRenderer.nonFaceRenderOrder(alphaMode: "mask", renderQueue: 2500), 4)
+        XCTAssertEqual(VRMRenderer.nonFaceRenderOrder(alphaMode: .mask, renderQueue: 2998), 4)
+        XCTAssertEqual(VRMRenderer.nonFaceRenderOrder(alphaMode: .mask, renderQueue: 2500), 4)
     }
 
     /// The cutout-band reorder is INTENTIONALLY broad: it covers every non-face
@@ -226,15 +226,15 @@ final class RenderOrderTests: XCTestCase {
     /// the broader scope (vs the hair-specific PR framing) is an explicit contract
     /// rather than an accident (Gitar review).
     func testDefaultQueueCutoutMaskAlsoSortsEarly() {
-        XCTAssertEqual(VRMRenderer.nonFaceRenderOrder(alphaMode: "mask", renderQueue: 2000), 1,
+        XCTAssertEqual(VRMRenderer.nonFaceRenderOrder(alphaMode: .mask, renderQueue: 2000), 1,
             "Default-queue (2000) non-face cutout MASK sorts in the early depth-writing band")
-        XCTAssertEqual(VRMRenderer.nonFaceRenderOrder(alphaMode: "mask", renderQueue: 2449), 1,
+        XCTAssertEqual(VRMRenderer.nonFaceRenderOrder(alphaMode: .mask, renderQueue: 2449), 1,
             "Cutout-band MASK just below the 2500 threshold sorts early")
     }
 
     /// Opaque and blend mappings are unchanged by the #322 cutout fix.
     func testNonFaceOpaqueAndBlendMapping() {
-        XCTAssertEqual(VRMRenderer.nonFaceRenderOrder(alphaMode: "opaque", renderQueue: 2000), 0)
-        XCTAssertEqual(VRMRenderer.nonFaceRenderOrder(alphaMode: "blend", renderQueue: 3000), 7)
+        XCTAssertEqual(VRMRenderer.nonFaceRenderOrder(alphaMode: .opaque, renderQueue: 2000), 0)
+        XCTAssertEqual(VRMRenderer.nonFaceRenderOrder(alphaMode: .blend, renderQueue: 3000), 7)
     }
 }

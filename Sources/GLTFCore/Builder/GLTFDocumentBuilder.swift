@@ -18,7 +18,7 @@
 import Foundation
 
 /// Builder for creating glTF documents programmatically
-public class GLTFDocumentBuilder {
+public final class GLTFDocumentBuilder {
 
     private var asset: GLTFAsset?
     private var scenes: [GLTFScene] = []

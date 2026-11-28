@@ -88,7 +88,7 @@ final class VRM10CITests: XCTestCase {
     func testVRM10MToonMaterialProperties() {
         XCTAssertFalse(reloadedModel.materials.isEmpty)
         let material = reloadedModel.materials[0]
-        XCTAssertEqual(material.alphaMode, "OPAQUE")
+        XCTAssertEqual(material.alphaMode, .opaque)
         XCTAssertEqual(material.metallicFactor, 0.0, accuracy: 0.001)
         XCTAssertEqual(material.roughnessFactor, 1.0, accuracy: 0.001)
     }

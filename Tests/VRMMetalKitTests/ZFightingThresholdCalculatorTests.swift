@@ -269,7 +269,7 @@ struct ZFightingThresholdCalculator {
                                 materialName.contains("brow")
 
             // Check if it uses MASK alpha mode (case-insensitive)
-            let isMaskMode = material.alphaMode.uppercased() == "MASK"
+            let isMaskMode = material.alphaMode == .mask
 
             if isFaceMaterial && isMaskMode {
                 return true

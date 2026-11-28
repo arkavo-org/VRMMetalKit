@@ -83,7 +83,7 @@ final class ContactShadowTests: XCTestCase {
     func testTranslucentSurfacesAreNotPaintedOver() async throws {
         let model = try await SwatchScene.load(.rigid, device: device)
         let leather = model.materials[1]
-        leather.alphaMode = "BLEND"
+        leather.alphaMode = .blend
         leather.baseColorFactor.w = 0.9
         // Outline hulls do not write depth either, so a translucent material's
         // own hull would cover it; keep this test about the shadow alone.

@@ -381,6 +381,7 @@ internal enum VRMResourceLoader {
         meshes.reserveCapacity(meshCount)
 
         let useParallelMeshLoading = context?.options.optimizations.contains(.parallelMeshLoading) ?? false
+        let retainCPUMorphDeltas = context?.options.retainCPUMorphDeltas ?? false
         let decodeLimiter = AsyncConcurrencyLimiter(limit: ProcessInfo.processInfo.activeProcessorCount)
 
         if useParallelMeshLoading && meshCount > 1 {
@@ -391,7 +392,8 @@ internal enum VRMResourceLoader {
                 device: device,
                 document: document,
                 bufferLoader: bufferLoader,
-                concurrencyLimiter: decodeLimiter
+                concurrencyLimiter: decodeLimiter,
+                retainCPUMorphDeltas: retainCPUMorphDeltas
             )
             let indices = Array(0..<meshCount)
             let loadedMeshes = try await parallelLoader.loadMeshesParallelThrowing(indices: indices) { completed, total in
@@ -420,7 +422,8 @@ internal enum VRMResourceLoader {
                         document: document,
                         device: device,
                         bufferLoader: bufferLoader,
-                        concurrencyLimiter: decodeLimiter
+                        concurrencyLimiter: decodeLimiter,
+                        retainCPUMorphDeltas: retainCPUMorphDeltas
                     )
                     meshes.append(mesh)
                 }
