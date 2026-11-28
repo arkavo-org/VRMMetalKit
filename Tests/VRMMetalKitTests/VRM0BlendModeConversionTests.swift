@@ -23,11 +23,9 @@ final class VRM0BlendModeConversionTests: XCTestCase {
     func testBlendModeThreeSetsTransparentWithZWriteExplicitly() throws {
         let material = makeConvertedMaterial(blendMode: 3.0)
 
-        XCTAssertEqual(material.alphaMode, "BLEND",
-            "VRM 0.x _BlendMode=3 must convert to alphaMode \"BLEND\". " +
+        XCTAssertEqual(material.alphaMode, .blend,
+            "VRM 0.x _BlendMode=3 must convert to alphaMode .blend. " +
             "Got \(material.alphaMode).")
-        XCTAssertEqual(material.blendMode, 3,
-            "blendMode field must round-trip the source _BlendMode value.")
         XCTAssertTrue(material.transparentWithZWrite,
             "VMK#265: VRM 0.x _BlendMode=3 must explicitly set " +
             "transparentWithZWrite=true on the converted material. The " +
@@ -42,8 +40,7 @@ final class VRM0BlendModeConversionTests: XCTestCase {
     func testBlendModeTwoDoesNotSetTransparentWithZWrite() throws {
         let material = makeConvertedMaterial(blendMode: 2.0)
 
-        XCTAssertEqual(material.alphaMode, "BLEND")
-        XCTAssertEqual(material.blendMode, 2)
+        XCTAssertEqual(material.alphaMode, .blend)
         XCTAssertFalse(material.transparentWithZWrite,
             "VRM 0.x _BlendMode=2 is plain Transparent (no Z-write); " +
             "transparentWithZWrite must stay false. Got true — the #265 " +
@@ -54,12 +51,12 @@ final class VRM0BlendModeConversionTests: XCTestCase {
     /// must not set `transparentWithZWrite`.
     func testOpaqueAndCutoutBlendModesDoNotSetTransparentWithZWrite() throws {
         let opaque = makeConvertedMaterial(blendMode: 0.0)
-        XCTAssertEqual(opaque.alphaMode, "OPAQUE")
+        XCTAssertEqual(opaque.alphaMode, .opaque)
         XCTAssertFalse(opaque.transparentWithZWrite,
             "VRM 0.x _BlendMode=0 (Opaque) must not set transparentWithZWrite.")
 
         let cutout = makeConvertedMaterial(blendMode: 1.0)
-        XCTAssertEqual(cutout.alphaMode, "MASK")
+        XCTAssertEqual(cutout.alphaMode, .mask)
         XCTAssertFalse(cutout.transparentWithZWrite,
             "VRM 0.x _BlendMode=1 (Cutout) must not set transparentWithZWrite.")
     }

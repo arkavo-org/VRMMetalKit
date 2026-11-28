@@ -24,7 +24,7 @@ import simd
 /// blinks are scheduled between ``blinkMinInterval`` and ``blinkMaxInterval``;
 /// idle smiles are scheduled between ``smileMinInterval`` and
 /// ``smileMaxInterval`` and only fire when the layer is otherwise idle.
-public class ExpressionLayer: AnimationLayer {
+public final class ExpressionLayer: AnimationLayer {
     /// Layer identifier used by ``AnimationLayerCompositor`` for lookup.
     public let identifier = "expression"
     /// Layer evaluation priority. Above ``IdleBreathingLayer`` (0), below ``ARLookAtLayer`` (2) and ``IKLayer`` (4).
@@ -107,9 +107,6 @@ public class ExpressionLayer: AnimationLayer {
     private var winkProgress: Float = 0
     private var isWinking = false
     private var winkLeft = true  // Alternate eyes
-
-    // Pre-allocated output
-    private var cachedOutput = LayerOutput(blendMode: .additive)
 
     // MARK: - Initialization
 
@@ -257,39 +254,36 @@ public class ExpressionLayer: AnimationLayer {
         }
     }
 
-    /// Returns this frame's morph weights: current sentiment, optional bell-curve idle smile, asymmetric wink, and bell-curve blink.
-    public func evaluate() -> LayerOutput {
-        // Clear previous morphs - ensures clean slate each frame
-        cachedOutput.morphWeights.removeAll(keepingCapacity: true)
+    /// Writes this frame's morph weights into `output`: current sentiment, optional bell-curve idle smile, asymmetric wink, and bell-curve blink.
+    public func evaluate(into output: inout LayerOutput) {
+        output.reset(blendMode: .additive)
 
         // Apply current expression
         if currentIntensity > 0.01 {
-            cachedOutput.morphWeights[currentExpression.rawValue] = currentIntensity
+            output.presetWeights[currentExpression] = currentIntensity
         }
 
         // Apply idle smile (soft bell curve)
         if isSmiling {
             let smileValue = sin(smileProgress * .pi) * 0.4  // Subtle smile, max 40%
-            cachedOutput.morphWeights[VRMExpressionPreset.happy.rawValue] = smileValue
+            output.presetWeights[.happy] = smileValue
         }
 
         // Apply wink (quick asymmetric blink)
         if isWinking {
             let winkValue = sin(winkProgress * .pi)
             if winkLeft {
-                cachedOutput.morphWeights[VRMExpressionPreset.blinkLeft.rawValue] = winkValue
+                output.presetWeights[.blinkLeft] = winkValue
             } else {
-                cachedOutput.morphWeights[VRMExpressionPreset.blinkRight.rawValue] = winkValue
+                output.presetWeights[.blinkRight] = winkValue
             }
         }
 
         // Apply blink (bell curve: 0 → 1 → 0)
         if isBlinking && !isWinking {  // Don't blink during wink
             let blinkValue = sin(blinkProgress * .pi)
-            cachedOutput.morphWeights[VRMExpressionPreset.blink.rawValue] = blinkValue
+            output.presetWeights[.blink] = blinkValue
         }
-
-        return cachedOutput
     }
 
     // MARK: - Private Methods

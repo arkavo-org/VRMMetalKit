@@ -193,9 +193,16 @@ public final class IKLayer: AnimationLayer {
         }
     }
 
-    /// Returns the leg-rotation overrides computed by the most recent ``update(deltaTime:context:)``, or an empty output when no foot was pinned.
-    public func evaluate() -> LayerOutput {
-        pendingOutput ?? LayerOutput()
+    /// Writes the leg-rotation overrides computed by the most recent ``update(deltaTime:context:)`` into `output`.
+    public func evaluate(into output: inout LayerOutput) {
+        guard let pending = pendingOutput else {
+            output.reset()
+            return
+        }
+        output.reset(blendMode: pending.blendMode)
+        for (bone, transform) in pending.bones {
+            output.bones[bone] = transform
+        }
     }
 
     /// Reset the IK layer state (call when animation changes).

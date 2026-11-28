@@ -241,7 +241,7 @@ public struct PerformanceMetrics: Codable {
 }
 
 /// Tracks performance metrics across frames
-public class PerformanceTracker {
+public final class PerformanceTracker {
     private var frameTimes: [Double] = []
     private var gpuTimes: [Double] = []
     private var sortedFrameTimes: [Double] = []

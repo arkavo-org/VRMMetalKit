@@ -791,12 +791,11 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
                 }
 
             case .shadeMultiply:
-                if var mtoon = material.mtoon {
+                if let mtoon = material.mtoon {
                     if let wrapper = mtoon.shadeMultiplyTexture {
                         wrapper.mtlTexture = result.color
                     } else {
                         mtoon.shadeMultiplyTexture = VRMTexture(name: "cosmetic_shade", mtlTexture: result.color)
-                        material.mtoon = mtoon
                     }
                 }
             }

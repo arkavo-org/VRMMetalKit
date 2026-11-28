@@ -94,7 +94,7 @@ public struct ActiveMorph {
 /// All public methods are intended to be called on the same thread that
 /// owns the encoded command buffer. The system is not internally
 /// synchronised.
-public class VRMMorphTargetSystem {
+public final class VRMMorphTargetSystem {
     private let device: MTLDevice
     private var morphWeightsBuffer: MTLBuffer?
     private let maxMorphTargets = VRMConstants.Rendering.maxMorphTargets
@@ -606,7 +606,7 @@ public struct VRMMorphTarget {
 /// methods from background threads.
 ///
 /// - Note: Future versions may use actor isolation or locks for full thread-safety.
-public class VRMExpressionController: @unchecked Sendable {
+public final class VRMExpressionController: @unchecked Sendable {
     private static let presetCount = VRMExpressionPreset.allCases.count
     private static let blinkGroupOrdinals: [Int] = [
         VRMExpressionPreset.blink.ordinal,
@@ -1346,7 +1346,7 @@ private func lerp(_ a: Float, _ b: Float, _ t: Float) -> Float {
 /// ```
 ///
 /// - Note: Always create and use VRMExpressionMixer on the main thread.
-public class VRMExpressionMixer: @unchecked Sendable {
+public final class VRMExpressionMixer: @unchecked Sendable {
     private var controller: VRMExpressionController
     private var autoBlinkEnabled = false
     private var blinkTimer: Timer?

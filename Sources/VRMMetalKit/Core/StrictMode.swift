@@ -567,7 +567,7 @@ public struct ResourceIndices {
 // MARK: - Strict Mode Validator
 
 /// Validates renderer state across a frame, dispatching ``StrictModeError`` according to ``RendererConfig/strict``.
-public class StrictValidator {
+public final class StrictValidator {
     private let config: RendererConfig
     private var drawCallCount = 0
     private var frameErrors: [StrictModeError] = []

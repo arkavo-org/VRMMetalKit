@@ -46,7 +46,7 @@ import simd
 /// `BufferLoader` is `@unchecked Sendable`; the cached preloaded-data map is
 /// installed once via ``setPreloadedData(_:)`` from the load pipeline and is
 /// not mutated thereafter.
-public class BufferLoader: @unchecked Sendable {
+public final class BufferLoader: @unchecked Sendable {
     private let document: GLTFDocument
     private let binaryData: Data?
     private let baseURL: URL?

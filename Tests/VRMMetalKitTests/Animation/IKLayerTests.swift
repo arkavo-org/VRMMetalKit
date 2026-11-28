@@ -415,7 +415,8 @@ private final class MockBoneLayer: AnimationLayer {
 
     func update(deltaTime: Float, context: AnimationContext) {}
 
-    func evaluate() -> LayerOutput {
-        LayerOutput(bones: [bone: ProceduralBoneTransform(rotation: rotation)])
+    func evaluate(into output: inout LayerOutput) {
+        output.reset()
+        output.bones[bone] = ProceduralBoneTransform(rotation: rotation)
     }
 }

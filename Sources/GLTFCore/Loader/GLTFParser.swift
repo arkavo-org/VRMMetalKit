@@ -753,7 +753,7 @@ public struct GLTFAnimationSampler: Codable {
 /// Plain `.gltf` JSON files are not parsed by this type directly; consumers
 /// that need pure-JSON loading should `JSONDecoder.decode(GLTFDocument.self, from:)`
 /// against ``GLTFDocument``.
-public class GLTFParser {
+public final class GLTFParser {
     /// The `BIN` chunk extracted from the most recent ``parse(data:filePath:)`` call, or `nil` if absent.
     public private(set) var binaryChunk: Data?
 

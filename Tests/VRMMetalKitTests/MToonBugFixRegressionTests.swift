@@ -83,7 +83,7 @@ final class MToonBugFixRegressionTests: XCTestCase {
             // Keep only the center sphere (material 1) visible so the side camera
             // doesn't overlap the -1.3 / +1.3 neighbor spheres along the X axis.
             for idx in [0, 2] where idx < model.materials.count {
-                model.materials[idx].alphaMode = "MASK"
+                model.materials[idx].alphaMode = .mask
                 model.materials[idx].alphaCutoff = 1.1
                 model.materials[idx].baseColorFactor = SIMD4<Float>(0, 0, 0, 0)
             }

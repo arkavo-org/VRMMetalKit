@@ -728,10 +728,8 @@ final class ARKitMouthDeformationTests: XCTestCase {
                 let binds = expr.morphTargetBinds.filter { $0.meshIndex == faceMeshIndex }
                 for vi in 0..<baseVerts.count {
                     var delta = SIMD3<Float>.zero
-                    for bind in binds where bind.index >= 0 && bind.index < firstPrim.morphTargets.count {
-                        if let deltas = firstPrim.morphTargets[bind.index].positionDeltas, vi < deltas.count {
-                            delta += deltas[vi] * bind.weight
-                        }
+                    for bind in binds where bind.index >= 0 && bind.index < firstPrim.morphTargetCount {
+                        delta += firstPrim.morphPositionDelta(targetIndex: bind.index, vertexIndex: vi) * bind.weight
                     }
                     let mag = simd_length(delta)
                     if mag > 1e-4 {
@@ -775,10 +773,8 @@ final class ARKitMouthDeformationTests: XCTestCase {
                     var delta = SIMD3<Float>.zero
                     for active in activeSet {
                         let idx = Int(active.index)
-                        if idx < firstPrim.morphTargets.count,
-                           let deltas = firstPrim.morphTargets[idx].positionDeltas,
-                           vi < deltas.count {
-                            delta += deltas[vi] * active.weight
+                        if idx < firstPrim.morphTargetCount {
+                            delta += firstPrim.morphPositionDelta(targetIndex: idx, vertexIndex: vi) * active.weight
                         }
                     }
                     poseMinDY = min(poseMinDY, delta.y)
@@ -787,6 +783,12 @@ final class ARKitMouthDeformationTests: XCTestCase {
                 }
 
                 let modelName = URL(fileURLWithPath: path).lastPathComponent
+                if !activeSet.isEmpty {
+                    XCTAssertGreaterThan(
+                        poseMaxDisp, 1e-4,
+                        "\(modelName) [\(poseName)]: active mouth pose must produce measurable vertex displacement"
+                    )
+                }
                 XCTAssertGreaterThanOrEqual(
                     poseMinDY,
                     maxSingleVisemeDownwardDY * 1.05 - 1e-4,

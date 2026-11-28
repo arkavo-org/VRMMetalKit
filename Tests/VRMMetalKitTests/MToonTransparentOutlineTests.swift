@@ -49,7 +49,7 @@ final class MToonTransparentOutlineTests: XCTestCase {
     private func leatherFrame(zWrite: Bool, outlined: Bool, doubleSided: Bool) async throws -> [UInt8] {
         let model = try await SwatchScene.load(.rigid, device: device)
         let leather = model.materials[1]
-        leather.alphaMode = "BLEND"
+        leather.alphaMode = .blend
         leather.baseColorFactor.w = 0.9
         leather.transparentWithZWrite = zWrite
         leather.doubleSided = doubleSided

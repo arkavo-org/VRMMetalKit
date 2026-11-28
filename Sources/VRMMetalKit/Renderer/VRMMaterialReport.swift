@@ -101,20 +101,18 @@ extension VRMRenderer {
 
         for (index, material) in model.materials.enumerated() {
             // Count alpha modes
-            switch material.alphaMode.lowercased() {
-            case "opaque":
+            switch material.alphaMode {
+            case .opaque:
                 opaqueCount += 1
-            case "mask":
+            case .mask:
                 maskCount += 1
-            case "blend":
+            case .blend:
                 blendCount += 1
-            default:
-                opaqueCount += 1
             }
 
             // Check for suspicious alpha values
             let hasAlphaIssue = material.baseColorFactor.w < 0.01 ||
-                               (material.alphaMode.lowercased() == "opaque" && material.baseColorFactor.w < 1.0)
+                               (material.alphaMode == .opaque && material.baseColorFactor.w < 1.0)
             if hasAlphaIssue {
                 suspiciousAlphaCount += 1
             }
@@ -148,7 +146,7 @@ extension VRMRenderer {
             let info = MaterialReport.MaterialInfo(
                 index: index,
                 name: material.name ?? "Material_\(index)",
-                alphaMode: material.alphaMode,
+                alphaMode: material.alphaMode.rawValue,
                 alphaCutoff: material.alphaCutoff,
                 baseColorFactor: [
                     material.baseColorFactor.x,

@@ -54,8 +54,8 @@ final class VRM1_0MaterialExtensionTests: XCTestCase {
     }
 
     func testVRM1_0AlphaModeParsed() {
-        let opaqueCount = model.materials.filter { $0.alphaMode == "OPAQUE" }.count
-        let blendCount = model.materials.filter { $0.alphaMode == "BLEND" }.count
+        let opaqueCount = model.materials.filter { $0.alphaMode == .opaque }.count
+        let blendCount = model.materials.filter { $0.alphaMode == .blend }.count
         XCTAssertGreaterThan(opaqueCount, 0, "Should have OPAQUE materials")
         XCTAssertGreaterThan(blendCount, 0, "Should have BLEND materials")
     }

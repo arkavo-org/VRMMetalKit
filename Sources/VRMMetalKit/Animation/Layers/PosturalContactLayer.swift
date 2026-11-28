@@ -145,11 +145,15 @@ public final class PosturalContactLayer: AnimationLayer {
     /// `base * (rest⁻¹·clip) * share == clipLocal * share` — the same post-multiply
     /// semantic as ``applyDirect(to:)``. (`.blend(1.0)` would REPLACE the running
     /// delta, snapping the bones out of the clip pose.) Empty ⇒ exact no-op.
-    public func evaluate() -> LayerOutput {
-        guard !pending.isEmpty else { return LayerOutput() }
-        var bones: [VRMHumanoidBone: ProceduralBoneTransform] = [:]
-        for (bone, q) in pending { bones[bone] = ProceduralBoneTransform(rotation: q) }
-        return LayerOutput(bones: bones, morphWeights: [:], blendMode: .additive)
+    public func evaluate(into output: inout LayerOutput) {
+        guard !pending.isEmpty else {
+            output.reset()
+            return
+        }
+        output.reset(blendMode: .additive)
+        for (bone, q) in pending {
+            output.bones[bone] = ProceduralBoneTransform(rotation: q)
+        }
     }
 
     /// Post-multiply the yield onto each affected bone's *current animated* local

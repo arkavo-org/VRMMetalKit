@@ -39,7 +39,7 @@ import ImageIO
 /// path-traversal checks against `baseURL`). The companion
 /// ``createSampler(from:)`` method maps a ``GLTFSampler`` to an
 /// `MTLSamplerState`.
-public class TextureLoader {
+public final class TextureLoader {
     private let device: MTLDevice
     private let textureLoader: MTKTextureLoader
     private let bufferLoader: BufferLoader

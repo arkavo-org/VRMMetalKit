@@ -140,7 +140,7 @@ final class SpringBoneBugAuditTDDTests: XCTestCase {
         // with its bind direction (1,0,0) → near-identity rotation.
         // With the bug, B is mapped to bone index 1 and sees target (0,1,0) while
         // using bind direction (0.707,0.707,0) → ~45° rotation.
-        let bRotation = nodeB.localRotation
+        let bRotation = nodeB.rotation
         let angle = 2.0 * acos(min(abs(bRotation.real), 1.0))
         XCTAssertLessThan(angle, 0.2,
             "Node B rotation should be near identity (bind pose aligned with target). " +

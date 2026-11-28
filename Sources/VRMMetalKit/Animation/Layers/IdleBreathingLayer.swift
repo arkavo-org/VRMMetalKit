@@ -22,7 +22,7 @@ import simd
 /// Designed to run at ``AnimationLayer/priority`` `0` so higher-priority
 /// layers (expressions, look-at, IK) override its writes. Driven by
 /// ``AnimationContext/time`` so the cycle is deterministic across runs.
-public class IdleBreathingLayer: AnimationLayer {
+public final class IdleBreathingLayer: AnimationLayer {
     /// Layer identifier used by ``AnimationLayerCompositor`` for lookup.
     public let identifier = "idle.breathing"
     /// Lowest priority so other layers always win on shared bones.
@@ -65,21 +65,11 @@ public class IdleBreathingLayer: AnimationLayer {
     private var time: Float = 0
     private let noiseOffset: Float
 
-    // Pre-allocated output to avoid per-frame allocations
-    // Additive: breathing is a small delta over whatever base layer (locomotion)
-    // produced — .blend(1.0) would replace the base outright on shared bones.
-    private var cachedOutput = LayerOutput(blendMode: .additive)
-
     // MARK: - Initialization
 
     /// Creates a layer with default amplitudes and periods. The micro-movement noise offset is randomised at construction so multiple avatars de-phase naturally.
     public init() {
         noiseOffset = Float.random(in: 0...1000)
-
-        // Pre-populate affected bones in cached output
-        for bone in affectedBones {
-            cachedOutput.bones[bone] = .identity
-        }
     }
 
     // MARK: - AnimationLayer Protocol
@@ -89,8 +79,12 @@ public class IdleBreathingLayer: AnimationLayer {
         time = context.time
     }
 
-    /// Returns this frame's breathing-and-sway pose: chest rotation, optional micro-movement, shoulder lift, hip sway, spine counter-rotation, and a static arms-down rig.
-    public func evaluate() -> LayerOutput {
+    /// Writes this frame's breathing-and-sway pose into `output`: chest rotation, optional micro-movement, shoulder lift, hip sway, spine counter-rotation, and a static arms-down rig.
+    public func evaluate(into output: inout LayerOutput) {
+        // Additive: breathing is a small delta over whatever base layer (locomotion)
+        // produced — .blend(1.0) would replace the base outright on shared bones.
+        output.reset(blendMode: .additive)
+
         // Calculate breathing phase (0 to 2π)
         let breathPhase = (time / breathingPeriod) * 2 * .pi
         let breathValue = sin(breathPhase) * breathingAmplitude
@@ -109,33 +103,33 @@ public class IdleBreathingLayer: AnimationLayer {
             let microRot = simd_quatf(angle: noise, axis: SIMD3<Float>(0, 1, 0))
             chestTransform.rotation = simd_mul(chestTransform.rotation, microRot)
         }
-        cachedOutput.bones[.chest] = chestTransform
+        output.bones[.chest] = chestTransform
 
         // Upper chest follows with reduced amplitude
         var upperChestTransform = ProceduralBoneTransform.identity
         upperChestTransform.rotation = simd_quatf(angle: breathValue * 0.5, axis: SIMD3<Float>(1, 0, 0))
-        cachedOutput.bones[.upperChest] = upperChestTransform
+        output.bones[.upperChest] = upperChestTransform
 
         // Shoulders rise slightly on inhale
         let shoulderLift = breathValue * 0.3
 
         var leftShoulderTransform = ProceduralBoneTransform.identity
         leftShoulderTransform.rotation = simd_quatf(angle: shoulderLift, axis: SIMD3<Float>(0, 0, 1))
-        cachedOutput.bones[.leftShoulder] = leftShoulderTransform
+        output.bones[.leftShoulder] = leftShoulderTransform
 
         var rightShoulderTransform = ProceduralBoneTransform.identity
         rightShoulderTransform.rotation = simd_quatf(angle: -shoulderLift, axis: SIMD3<Float>(0, 0, 1))
-        cachedOutput.bones[.rightShoulder] = rightShoulderTransform
+        output.bones[.rightShoulder] = rightShoulderTransform
 
         // Hips sway for weight shift
         var hipsTransform = ProceduralBoneTransform.identity
         hipsTransform.rotation = simd_quatf(angle: swayValue, axis: SIMD3<Float>(0, 0, 1))
-        cachedOutput.bones[.hips] = hipsTransform
+        output.bones[.hips] = hipsTransform
 
         // Spine counter-rotates to keep head stable
         var spineTransform = ProceduralBoneTransform.identity
         spineTransform.rotation = simd_quatf(angle: -swayValue * 0.5, axis: SIMD3<Float>(0, 0, 1))
-        cachedOutput.bones[.spine] = spineTransform
+        output.bones[.spine] = spineTransform
 
         // Arms down from T-pose - rotate upper arms down ~70 degrees.
         // Normalized VRM rest pose: left upper arm points along +X, right along -X,
@@ -143,22 +137,20 @@ public class IdleBreathingLayer: AnimationLayer {
         // so the left arm needs a negative angle and the right arm a positive one.
         var leftUpperArmTransform = ProceduralBoneTransform.identity
         leftUpperArmTransform.rotation = simd_quatf(angle: -1.2, axis: SIMD3<Float>(0, 0, 1))  // ~70° down
-        cachedOutput.bones[.leftUpperArm] = leftUpperArmTransform
+        output.bones[.leftUpperArm] = leftUpperArmTransform
 
         var rightUpperArmTransform = ProceduralBoneTransform.identity
         rightUpperArmTransform.rotation = simd_quatf(angle: 1.2, axis: SIMD3<Float>(0, 0, 1))  // ~70° down (opposite direction)
-        cachedOutput.bones[.rightUpperArm] = rightUpperArmTransform
+        output.bones[.rightUpperArm] = rightUpperArmTransform
 
         // Bend elbows slightly for natural pose (~20 degrees)
         var leftLowerArmTransform = ProceduralBoneTransform.identity
         leftLowerArmTransform.rotation = simd_quatf(angle: -0.35, axis: SIMD3<Float>(0, 1, 0))  // Bend elbow
-        cachedOutput.bones[.leftLowerArm] = leftLowerArmTransform
+        output.bones[.leftLowerArm] = leftLowerArmTransform
 
         var rightLowerArmTransform = ProceduralBoneTransform.identity
         rightLowerArmTransform.rotation = simd_quatf(angle: 0.35, axis: SIMD3<Float>(0, 1, 0))  // Bend elbow (opposite)
-        cachedOutput.bones[.rightLowerArm] = rightLowerArmTransform
-
-        return cachedOutput
+        output.bones[.rightLowerArm] = rightLowerArmTransform
     }
 
     // MARK: - Private Methods

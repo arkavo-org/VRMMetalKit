@@ -15,6 +15,7 @@
 //
 
 import Foundation
+import Metal
 import simd
 
 // MARK: - Blend Shape Formula
@@ -491,14 +492,22 @@ public struct ARKitToVRMMapper: Sendable {
             }
             guard !visemeBindsForMesh.isEmpty else { continue }
 
-            for (primIndex, prim) in mesh.primitives.enumerated() where !prim.morphTargets.isEmpty {
+            for (primIndex, prim) in mesh.primitives.enumerated() where prim.morphTargetCount > 0 {
                 var vertexSet = Set<Int>()
                 for bind in visemeBindsForMesh {
-                    guard bind.index >= 0, bind.index < prim.morphTargets.count,
-                          let deltas = prim.morphTargets[bind.index].positionDeltas else { continue }
-                    for (vi, delta) in deltas.enumerated() {
-                        if simd_length_squared(delta * bind.weight) > 1e-8 {
-                            vertexSet.insert(vi)
+                    guard bind.index >= 0, bind.index < prim.morphTargetCount else { continue }
+                    if let deltas = prim.morphTargets[safe: bind.index]?.positionDeltas {
+                        for (vi, delta) in deltas.enumerated() {
+                            if simd_length_squared(delta * bind.weight) > 1e-8 {
+                                vertexSet.insert(vi)
+                            }
+                        }
+                    } else if prim.morphPositionsSoA != nil, prim.vertexCount > 0 {
+                        for vi in 0..<prim.vertexCount {
+                            let delta = prim.morphPositionDelta(targetIndex: bind.index, vertexIndex: vi)
+                            if simd_length_squared(delta * bind.weight) > 1e-8 {
+                                vertexSet.insert(vi)
+                            }
                         }
                     }
                 }
@@ -518,10 +527,8 @@ public struct ARKitToVRMMapper: Sendable {
                     for vi in vertices {
                         var sumDelta = SIMD3<Float>.zero
                         for bind in binds {
-                            guard bind.index >= 0, bind.index < prim.morphTargets.count,
-                                  let deltas = prim.morphTargets[bind.index].positionDeltas,
-                                  vi < deltas.count else { continue }
-                            sumDelta += deltas[vi] * bind.weight
+                            guard bind.index >= 0, bind.index < prim.morphTargetCount else { continue }
+                            sumDelta += prim.morphPositionDelta(targetIndex: bind.index, vertexIndex: vi) * bind.weight
                         }
                         maxDisp = Swift.max(maxDisp, simd_length(sumDelta))
                     }

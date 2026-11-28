@@ -439,7 +439,7 @@ final class SpringBoneRotationTests: XCTestCase {
             return
         }
         let bone1 = model.nodes[1]
-        let settledRotation = bone1.localRotation
+        let settledRotation = bone1.rotation
 
         print("=== Displacement Deadzone Test ===")
         print("Settled rotation: w=\(String(format: "%.6f", settledRotation.real))")
@@ -451,7 +451,7 @@ final class SpringBoneRotationTests: XCTestCase {
         Thread.sleep(forTimeInterval: 0.05)
         system.writeBonesToNodes(model: model)
 
-        let finalRotation = bone1.localRotation
+        let finalRotation = bone1.rotation
 
         // Calculate rotation difference (angle between quaternions)
         let dotQ = abs(simd_dot(settledRotation.vector, finalRotation.vector))

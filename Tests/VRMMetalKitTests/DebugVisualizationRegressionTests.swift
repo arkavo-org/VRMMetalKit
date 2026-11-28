@@ -87,12 +87,12 @@ final class DebugVisualizationRegressionTests: XCTestCase {
         let control = maskA2CRenderer(debugMode: 0)
         XCTAssertNil(
             control.specializedMToonPipelineIfAvailable(
-                isSkinned: false, materialAlphaMode: "mask", mtoonUniforms: mtoon),
+                isSkinned: false, materialAlphaMode: .mask, mtoonUniforms: mtoon),
             "Control: without debug, A2C MASK keeps the fallback A2C PSO.")
 
         let renderer = maskA2CRenderer(debugMode: 1)
         guard let resolved = renderer.specializedMToonPipelineIfAvailable(
-            isSkinned: false, materialAlphaMode: "mask", mtoonUniforms: mtoon
+            isSkinned: false, materialAlphaMode: .mask, mtoonUniforms: mtoon
         ) else {
             return XCTFail(
                 "debugUVs must apply to MASK + MSAA + alphaToCoverage materials; " +
@@ -113,13 +113,13 @@ final class DebugVisualizationRegressionTests: XCTestCase {
         let control = maskA2CRenderer(debugMode: 0)
         XCTAssertNil(
             control.specializedMToonPipelineIfAvailable(
-                isSkinned: false, materialAlphaMode: "opaque", mtoonUniforms: mtoon),
+                isSkinned: false, materialAlphaMode: .opaque, mtoonUniforms: mtoon),
             "Control: alpha mode 3 has no specialized production PSO.")
 
         let renderer = maskA2CRenderer(debugMode: 1)
         XCTAssertNotNil(
             renderer.specializedMToonPipelineIfAvailable(
-                isSkinned: false, materialAlphaMode: "opaque", mtoonUniforms: mtoon),
+                isSkinned: false, materialAlphaMode: .opaque, mtoonUniforms: mtoon),
             "Alpha mode 3 must not silently opt out of debug visualization.")
     }
 
@@ -135,7 +135,7 @@ final class DebugVisualizationRegressionTests: XCTestCase {
         renderer.debugUVs = 11
 
         guard let resolved = renderer.specializedMToonPipelineIfAvailable(
-            isSkinned: false, materialAlphaMode: "opaque", mtoonUniforms: mtoon
+            isSkinned: false, materialAlphaMode: .opaque, mtoonUniforms: mtoon
         ) else {
             throw XCTSkip("MToon specialization unavailable on this device")
         }

@@ -16,6 +16,7 @@
 
 import Foundation
 import simd
+import Synchronization
 
 // MARK: - Blend Modes
 
@@ -122,7 +123,9 @@ public struct AnimationContext: Sendable {
 public struct LayerOutput: Sendable {
     /// Per-bone procedural deltas. Bones not present are not written by this layer.
     public var bones: [VRMHumanoidBone: ProceduralBoneTransform]
-    /// Morph-weight contributions keyed by expression name. Always accumulated additively across layers.
+    /// Standard VRM preset expression weight contributions. Accumulated additively without string hashing.
+    public var presetWeights: [VRMExpressionPreset: Float]
+    /// Custom morph-weight contributions keyed by expression name. Always accumulated additively across layers.
     public var morphWeights: [String: Float]
     /// How this output combines with the running composite (see ``AnimationBlendMode``).
     public var blendMode: AnimationBlendMode
@@ -130,11 +133,21 @@ public struct LayerOutput: Sendable {
     /// Creates an output. Defaults produce an empty additive blend (no effect).
     public init(
         bones: [VRMHumanoidBone: ProceduralBoneTransform] = [:],
+        presetWeights: [VRMExpressionPreset: Float] = [:],
         morphWeights: [String: Float] = [:],
         blendMode: AnimationBlendMode = .blend(1.0)
     ) {
         self.bones = bones
+        self.presetWeights = presetWeights
         self.morphWeights = morphWeights
+        self.blendMode = blendMode
+    }
+
+    /// Clears all bone and morph entries while retaining allocated dictionary storage for zero-allocation reuse.
+    public mutating func reset(blendMode: AnimationBlendMode = .blend(1.0)) {
+        bones.removeAll(keepingCapacity: true)
+        presetWeights.removeAll(keepingCapacity: true)
+        morphWeights.removeAll(keepingCapacity: true)
         self.blendMode = blendMode
     }
 }
@@ -158,8 +171,21 @@ public protocol AnimationLayer: AnyObject {
     /// Update internal state with current context
     func update(deltaTime: Float, context: AnimationContext)
 
-    /// Evaluate and return the layer's output transforms
-    func evaluate() -> LayerOutput
+    /// Evaluate and write the layer's output transforms into a reusable `output` buffer.
+    ///
+    /// Implementations should call `output.reset(blendMode:)` (or overwrite `output.blendMode`
+    /// and populate `output.bones` / `output.presetWeights` / `output.morphWeights` in place)
+    /// to avoid per-frame dictionary allocations.
+    func evaluate(into output: inout LayerOutput)
+}
+
+public extension AnimationLayer {
+    /// Convenience wrapper that allocates a fresh ``LayerOutput`` and delegates to ``evaluate(into:)``.
+    func evaluate() -> LayerOutput {
+        var output = LayerOutput()
+        evaluate(into: &output)
+        return output
+    }
 }
 
 // MARK: - Animation Layer Compositor
@@ -183,21 +209,29 @@ public protocol AnimationLayer: AnyObject {
 /// captured base pose as `node.rotation = baseRotation * delta`,
 /// `node.translation = baseTranslation + delta`, `node.scale = baseScale * delta`,
 /// and world transforms are propagated from each root.
-public class AnimationLayerCompositor {
+public final class AnimationLayerCompositor {
     private var layers: [AnimationLayer] = []
     private weak var model: VRMModel?
 
     // Pre-allocated storage to avoid per-frame allocations
+    private var scratchOutput = LayerOutput()
     private var compositedBones: [VRMHumanoidBone: ProceduralBoneTransform] = [:]
+    private var compositedPresetMorphs: [VRMExpressionPreset: Float] = [:]
     private var compositedMorphs: [String: Float] = [:]
 
-    // Base pose storage - the original rotations from the VRM model
+    // Cached node references and base pose storage captured at setup(model:)
+    private var boneNodes: [VRMHumanoidBone: VRMNode] = [:]
+    private var rootNodes: [VRMNode] = []
     private var basePoseRotations: [VRMHumanoidBone: simd_quatf] = [:]
     private var basePoseTranslations: [VRMHumanoidBone: SIMD3<Float>] = [:]
     private var basePoseScales: [VRMHumanoidBone: SIMD3<Float>] = [:]
 
     /// Creates an empty compositor. Call ``setup(model:)`` before ``update(deltaTime:context:)``.
     public init() {}
+
+    private var cachedTopologyRevision: UInt64 = 0
+    private var cachedParentHierarchyRevision: UInt64 = 0
+    private var cachedNodeCount: Int = 0
 
     /// Binds the compositor to `model` and captures the model's current rotation, translation, and scale per humanoid bone as the base pose.
     ///
@@ -206,6 +240,10 @@ public class AnimationLayerCompositor {
     /// moment of setup.
     public func setup(model: VRMModel) {
         self.model = model
+        basePoseRotations.removeAll(keepingCapacity: true)
+        basePoseTranslations.removeAll(keepingCapacity: true)
+        basePoseScales.removeAll(keepingCapacity: true)
+        refreshTopologyCaches(for: model)
 
         // Capture base pose rotations for all humanoid bones
         guard let humanoid = model.humanoid else { return }
@@ -217,6 +255,21 @@ public class AnimationLayerCompositor {
                 basePoseScales[bone] = node.scale
             }
         }
+    }
+
+    private func refreshTopologyCaches(for model: VRMModel) {
+        boneNodes.removeAll(keepingCapacity: true)
+        rootNodes = model.nodes.filter { $0.parent == nil }
+        if let humanoid = model.humanoid {
+            for bone in VRMHumanoidBone.allCases {
+                if let nodeIndex = humanoid.getBoneNode(bone), nodeIndex < model.nodes.count {
+                    boneNodes[bone] = model.nodes[nodeIndex]
+                }
+            }
+        }
+        cachedTopologyRevision = model.topologyRevision
+        cachedParentHierarchyRevision = VRMNode.parentHierarchyRevision.load(ordering: .relaxed)
+        cachedNodeCount = model.nodes.count
     }
 
     /// Add an animation layer (automatically sorted by priority)
@@ -242,7 +295,16 @@ public class AnimationLayerCompositor {
 
     /// Get the current composited morph weights (for debugging/inspection)
     public func getCompositedMorphs() -> [String: Float] {
-        compositedMorphs
+        var combined = compositedMorphs
+        for (preset, weight) in compositedPresetMorphs {
+            combined[preset.rawValue, default: 0] += weight
+        }
+        return combined
+    }
+
+    /// Get the current composited preset morph weights (zero string hashing).
+    public func getCompositedPresetMorphs() -> [VRMExpressionPreset: Float] {
+        compositedPresetMorphs
     }
 
     /// Get the composited rotation for a specific bone after all layers are evaluated
@@ -259,14 +321,16 @@ public class AnimationLayerCompositor {
             layer.update(deltaTime: deltaTime, context: context)
         }
 
-        // Clear previous frame's data
+        // Clear previous frame's data while keeping allocated storage
         compositedBones.removeAll(keepingCapacity: true)
+        compositedPresetMorphs.removeAll(keepingCapacity: true)
         compositedMorphs.removeAll(keepingCapacity: true)
 
-        // Composite outputs from lowest to highest priority
+        // Composite outputs from lowest to highest priority using a single reusable scratch buffer
         for layer in layers where layer.isEnabled {
-            let output = layer.evaluate()
-            compositeOutput(output)
+            scratchOutput.reset()
+            layer.evaluate(into: &scratchOutput)
+            compositeOutput(scratchOutput)
         }
 
         // Apply to model
@@ -276,6 +340,10 @@ public class AnimationLayerCompositor {
     /// Apply only morph weights without affecting bone transforms
     public func applyMorphsToController(_ controller: VRMExpressionController?) {
         guard let controller = controller else { return }
+
+        for (preset, weight) in compositedPresetMorphs {
+            controller.setExpressionWeight(preset, weight: weight)
+        }
 
         for (name, weight) in compositedMorphs {
             if let preset = VRMExpressionPreset(rawValue: name) {
@@ -288,7 +356,7 @@ public class AnimationLayerCompositor {
 
     // MARK: - Private Methods
 
-    private func compositeOutput(_ output: LayerOutput) {
+    private func compositeOutput(_ output: borrowing LayerOutput) {
         // Blend bones
         for (bone, transform) in output.bones {
             switch output.blendMode {
@@ -312,9 +380,16 @@ public class AnimationLayerCompositor {
             }
         }
 
-        // Morphs always accumulate additively
+        // Morphs always accumulate additively; fold preset-matching string keys into the typed map
+        for (preset, value) in output.presetWeights {
+            compositedPresetMorphs[preset, default: 0] += value
+        }
         for (key, value) in output.morphWeights {
-            compositedMorphs[key, default: 0] += value
+            if let preset = VRMExpressionPreset(rawValue: key) {
+                compositedPresetMorphs[preset, default: 0] += value
+            } else {
+                compositedMorphs[key, default: 0] += value
+            }
         }
     }
 
@@ -335,19 +410,32 @@ public class AnimationLayerCompositor {
     }
 
     private func applyToModel(model: VRMModel) {
-        guard let humanoid = model.humanoid else { return }
+        let currentParentRev = VRMNode.parentHierarchyRevision.load(ordering: .relaxed)
+        if model.topologyRevision != cachedTopologyRevision
+            || currentParentRev != cachedParentHierarchyRevision
+            || model.nodes.count != cachedNodeCount {
+            refreshTopologyCaches(for: model)
+        }
+
+        let identityRot = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+        let unitScale = SIMD3<Float>(1, 1, 1)
 
         // Apply bone transforms by composing procedural deltas with base pose
         for (bone, proceduralTransform) in compositedBones {
-            guard let nodeIndex = humanoid.getBoneNode(bone),
-                  nodeIndex < model.nodes.count else { continue }
-
-            let node = model.nodes[nodeIndex]
+            let node: VRMNode
+            if let cached = boneNodes[bone] {
+                node = cached
+            } else if let nodeIndex = model.humanoid?.getBoneNode(bone), nodeIndex < model.nodes.count {
+                node = model.nodes[nodeIndex]
+                boneNodes[bone] = node
+            } else {
+                continue
+            }
 
             // Get base pose (default to identity if not captured)
-            let baseRotation = basePoseRotations[bone] ?? simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+            let baseRotation = basePoseRotations[bone] ?? identityRot
             let baseTranslation = basePoseTranslations[bone] ?? .zero
-            let baseScale = basePoseScales[bone] ?? SIMD3<Float>(1, 1, 1)
+            let baseScale = basePoseScales[bone] ?? unitScale
 
             // Compose: final = basePose * proceduralDelta
             node.rotation = simd_mul(baseRotation, proceduralTransform.rotation)
@@ -357,8 +445,14 @@ public class AnimationLayerCompositor {
         }
 
         // Propagate world transforms from root nodes
-        for node in model.nodes where node.parent == nil {
-            node.updateWorldTransform()
+        if !rootNodes.isEmpty {
+            for node in rootNodes {
+                node.updateWorldTransform()
+            }
+        } else {
+            for node in model.nodes where node.parent == nil {
+                node.updateWorldTransform()
+            }
         }
     }
 }

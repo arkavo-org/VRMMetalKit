@@ -839,8 +839,8 @@ final class CosmeticWearablesTests: XCTestCase {
             XCTAssertEqual(worldV0.z,  0.1875, accuracy: 1e-3, "VRM0=\(isVRM0) zero double-Ry180 Z check")
 
             // Morph delta scaled consistently by 1.25 (blueprint remains unscaled at 0.1)
-            let scaledDeltaZ = abs(prim.morphTargets[0].positionDeltas?[0].z ?? 0)
-            let blueprintDeltaZ = abs(asset.meshes[0].primitives[0].morphTargets[0].positionDeltas?[0].z ?? 0)
+            let scaledDeltaZ = abs(prim.morphPositionDelta(targetIndex: 0, vertexIndex: 0).z)
+            let blueprintDeltaZ = abs(asset.meshes[0].primitives[0].morphPositionDelta(targetIndex: 0, vertexIndex: 0).z)
             XCTAssertEqual(scaledDeltaZ, 0.125, accuracy: 1e-4)
             XCTAssertEqual(blueprintDeltaZ, 0.1, accuracy: 1e-4)
 

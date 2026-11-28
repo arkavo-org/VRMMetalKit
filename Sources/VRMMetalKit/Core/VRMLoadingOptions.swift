@@ -340,6 +340,14 @@ public struct VRMLoadingOptions: Sendable {
     /// `MTLTexture`. Matching texture indices bypass ImageIO decoding completely.
     public let preloadedTextures: [Int: VRMPreloadedTexture]
 
+    /// When `false` (the default), CPU-side morph-target delta arrays (`positionDeltas`,
+    /// `normalDeltas`, `tangentDeltas`) are released immediately after uploading to GPU
+    /// SoA buffers, significantly reducing resident memory per avatar.
+    ///
+    /// Set to `true` when CPU inspection of morph deltas is required on a GPU-loaded model.
+    /// CPU-only loads (`device == nil`) always retain CPU deltas regardless of this flag.
+    public let retainCPUMorphDeltas: Bool
+
     /// Creates loading options.
     ///
     /// - Parameters:
@@ -352,6 +360,7 @@ public struct VRMLoadingOptions: Sendable {
     ///   - augmentSpringBoneColliders: Synthesize bone-derived colliders additive to authored ones (default: true).
     ///   - limits: Configurable memory and structural quotas enforced during load (default: `.default`).
     ///   - preloadedTextures: Optional in-memory texture overrides keyed by glTF texture index (default: empty).
+    ///   - retainCPUMorphDeltas: Keep CPU morph-delta arrays after GPU SoA upload (default: false).
     public init(
         progressCallback: (@Sendable (VRMLoadingProgress) -> Void)? = nil,
         progressUpdateInterval: TimeInterval = 0.1,
@@ -359,7 +368,8 @@ public struct VRMLoadingOptions: Sendable {
         optimizations: VRMLoadingOptimization = .default,
         augmentSpringBoneColliders: Bool = true,
         limits: VRMLoaderLimits = .default,
-        preloadedTextures: [Int: VRMPreloadedTexture] = [:]
+        preloadedTextures: [Int: VRMPreloadedTexture] = [:],
+        retainCPUMorphDeltas: Bool = false
     ) {
         self.progressCallback = progressCallback
         self.progressUpdateInterval = progressUpdateInterval
@@ -368,6 +378,7 @@ public struct VRMLoadingOptions: Sendable {
         self.augmentSpringBoneColliders = augmentSpringBoneColliders
         self.limits = limits
         self.preloadedTextures = preloadedTextures
+        self.retainCPUMorphDeltas = retainCPUMorphDeltas
     }
     
     /// Default options: no progress callback, cancellation enabled, ``VRMLoadingOptimization/default`` optimizations.

@@ -127,7 +127,7 @@ final class MSAAAlphaToCoverageTests: XCTestCase {
         let renderer = VRMRenderer(device: device, config: config)
 
         let selected = renderer.selectPipelineForDraw(
-            alphaMode: "mask",
+            alphaMode: .mask,
             isSkinned: false,
             debugWireframe: false
         )
@@ -141,7 +141,7 @@ final class MSAAAlphaToCoverageTests: XCTestCase {
         let renderer = VRMRenderer(device: device, config: config)
 
         let selected = renderer.selectPipelineForDraw(
-            alphaMode: "mask",
+            alphaMode: .mask,
             isSkinned: true,
             debugWireframe: false
         )
@@ -154,7 +154,7 @@ final class MSAAAlphaToCoverageTests: XCTestCase {
         let renderer = VRMRenderer(device: device, config: config)
 
         let selected = renderer.selectPipelineForDraw(
-            alphaMode: "opaque",
+            alphaMode: .opaque,
             isSkinned: false,
             debugWireframe: false
         )
@@ -167,7 +167,7 @@ final class MSAAAlphaToCoverageTests: XCTestCase {
         let renderer = VRMRenderer(device: device, config: config)
 
         let selected = renderer.selectPipelineForDraw(
-            alphaMode: "blend",
+            alphaMode: .blend,
             isSkinned: false,
             debugWireframe: false
         )
@@ -187,7 +187,7 @@ final class MSAAAlphaToCoverageTests: XCTestCase {
         let renderer = VRMRenderer(device: device, config: config)
 
         let selected = renderer.selectPipelineForDraw(
-            alphaMode: "mask",
+            alphaMode: .mask,
             isSkinned: false,
             debugWireframe: false
         )
@@ -202,7 +202,7 @@ final class MSAAAlphaToCoverageTests: XCTestCase {
         let renderer = VRMRenderer(device: device, config: config)
 
         let selected = renderer.selectPipelineForDraw(
-            alphaMode: "mask",
+            alphaMode: .mask,
             isSkinned: true,
             debugWireframe: false
         )
@@ -218,7 +218,7 @@ final class MSAAAlphaToCoverageTests: XCTestCase {
         let renderer = VRMRenderer(device: device, config: config)
 
         let selected = renderer.selectPipelineForDraw(
-            alphaMode: "mask",
+            alphaMode: .mask,
             isSkinned: false,
             debugWireframe: false
         )
@@ -246,7 +246,7 @@ final class MSAAAlphaToCoverageTests: XCTestCase {
         )
         
         // Verify model has MASK materials
-        let maskMaterials = model.materials.filter { $0.alphaMode.uppercased() == "MASK" }
+        let maskMaterials = model.materials.filter { $0.alphaMode == .mask }
         print("Model has \(maskMaterials.count) MASK materials:")
         for mat in maskMaterials {
             print("  - \(mat.name ?? "unnamed")")

@@ -788,9 +788,8 @@ struct VRMVideoRendererCLI {
         if options.outlineScale != 1.0 {
             var scaled = 0
             for material in model.materials {
-                guard var mtoon = material.mtoon else { continue }
+                guard let mtoon = material.mtoon else { continue }
                 mtoon.outlineWidthFactor *= options.outlineScale
-                material.mtoon = mtoon
                 scaled += 1
             }
             print("   ✏️  outlineWidthFactor scaled by \(options.outlineScale) on \(scaled) MToon materials")

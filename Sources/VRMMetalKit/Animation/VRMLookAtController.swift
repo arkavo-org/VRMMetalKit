@@ -60,7 +60,7 @@ public enum VRMLookAtTarget {
 /// damping curve, applies the model's range-map constraints, and writes
 /// out via the chosen mode. The smoothing factor ``smoothing`` is the
 /// damping exponent: `0` is instant, `1` is fully damped (no motion).
-public class VRMLookAtController {
+public final class VRMLookAtController {
     // Configuration
     /// Master enable. When `false`, ``update(deltaTime:)`` is a no-op and the eyes hold their last values.
     public var enabled: Bool = true

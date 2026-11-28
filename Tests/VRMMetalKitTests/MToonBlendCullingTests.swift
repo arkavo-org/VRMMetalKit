@@ -81,7 +81,7 @@ final class MToonBlendCullingTests: XCTestCase {
         let model = try await loadSwatchesRenamingMiddleMaterial(to: "Collars")
         let sphere = model.materials[1]
         XCTAssertEqual(sphere.name, "Collars")
-        sphere.alphaMode = "BLEND"
+        sphere.alphaMode = .blend
         sphere.baseColorFactor.w = 0.6
         sphere.transparentWithZWrite = zWrite
         sphere.doubleSided = doubleSided
@@ -112,8 +112,9 @@ final class MToonBlendCullingTests: XCTestCase {
 
     private func allSpheresFrame(alphaMode: String) async throws -> [UInt8] {
         let model = try await SwatchScene.load(.rigid, device: device)
+        let resolvedMode = VRMAlphaMode(gltfValue: alphaMode)
         for material in model.materials {
-            material.alphaMode = alphaMode
+            material.alphaMode = resolvedMode
             material.baseColorFactor.w = 1
             material.doubleSided = false
             material.mtoon?.outlineWidthMode = .none
@@ -124,7 +125,7 @@ final class MToonBlendCullingTests: XCTestCase {
     private func blendSphereFrame(zWrite: Bool, doubleSided: Bool) async throws -> [UInt8] {
         let model = try await SwatchScene.load(.rigid, device: device)
         let sphere = model.materials[1]
-        sphere.alphaMode = "BLEND"
+        sphere.alphaMode = .blend
         sphere.baseColorFactor.w = 0.6
         sphere.transparentWithZWrite = zWrite
         sphere.doubleSided = doubleSided

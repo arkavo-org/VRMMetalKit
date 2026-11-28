@@ -368,7 +368,7 @@ public struct MToonMaterialUniforms {
     }
 
     /// Builds a uniform payload from a ``VRMMToonMaterial`` plus the current animation time.
-    public init(from mtoon: borrowing VRMMToonMaterial, time: Float = 0.0) {
+    public init(from mtoon: VRMMToonMaterial, time: Float = 0.0) {
         self.shadeColorFactor = mtoon.shadeColorFactor
         self.shadingToonyFactor = mtoon.shadingToonyFactor
         self.shadingShiftFactor = mtoon.shadingShiftFactor

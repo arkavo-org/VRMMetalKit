@@ -23,7 +23,7 @@ import simd
 /// reflects the live camera. The contributions ``headContribution``,
 /// ``neckContribution``, and ``eyeContribution`` typically sum to `1.0` so
 /// the apparent gaze direction matches the camera vector.
-public class ARLookAtLayer: AnimationLayer {
+public final class ARLookAtLayer: AnimationLayer {
     /// Layer identifier used by ``AnimationLayerCompositor`` for lookup.
     public let identifier = "ar.lookat"
     /// Layer evaluation priority. Sits above expression (1) and below IK (4).
@@ -81,18 +81,10 @@ public class ARLookAtLayer: AnimationLayer {
     private var saccadeTimer: Float = 0
     private var nextSaccadeTime: Float = 1.5
 
-    // Pre-allocated output
-    private var cachedOutput = LayerOutput(blendMode: .blend(1.0))
-
     // MARK: - Initialization
 
     /// Creates a layer with default contributions, constraints, and smoothing.
-    public init() {
-        // Pre-populate affected bones
-        for bone in affectedBones {
-            cachedOutput.bones[bone] = .identity
-        }
-    }
+    public init() {}
 
     // MARK: - AnimationLayer Protocol
 
@@ -130,8 +122,10 @@ public class ARLookAtLayer: AnimationLayer {
         }
     }
 
-    /// Returns this frame's gaze distribution: head and neck pitch/yaw scaled by their contributions, and eye rotation augmented with the current saccade offset.
-    public func evaluate() -> LayerOutput {
+    /// Writes this frame's gaze distribution into `output`: head and neck pitch/yaw scaled by their contributions, and eye rotation augmented with the current saccade offset.
+    public func evaluate(into output: inout LayerOutput) {
+        output.reset(blendMode: .blend(1.0))
+
         // Head rotation (primary contribution)
         let headYaw = currentYaw * headContribution
         let headPitch = currentPitch * headContribution
@@ -140,7 +134,7 @@ public class ARLookAtLayer: AnimationLayer {
 
         var headTransform = ProceduralBoneTransform.identity
         headTransform.rotation = simd_mul(headRotY, headRotX)
-        cachedOutput.bones[.head] = headTransform
+        output.bones[.head] = headTransform
 
         // Neck rotation (secondary contribution)
         let neckYaw = currentYaw * neckContribution
@@ -150,7 +144,7 @@ public class ARLookAtLayer: AnimationLayer {
 
         var neckTransform = ProceduralBoneTransform.identity
         neckTransform.rotation = simd_mul(neckRotY, neckRotX)
-        cachedOutput.bones[.neck] = neckTransform
+        output.bones[.neck] = neckTransform
 
         // Eye rotation (fine detail + saccades)
         let eyeYaw = currentYaw * eyeContribution + saccadeOffset.x
@@ -161,13 +155,11 @@ public class ARLookAtLayer: AnimationLayer {
 
         var leftEyeTransform = ProceduralBoneTransform.identity
         leftEyeTransform.rotation = eyeRot
-        cachedOutput.bones[.leftEye] = leftEyeTransform
+        output.bones[.leftEye] = leftEyeTransform
 
         var rightEyeTransform = ProceduralBoneTransform.identity
         rightEyeTransform.rotation = eyeRot
-        cachedOutput.bones[.rightEye] = rightEyeTransform
-
-        return cachedOutput
+        output.bones[.rightEye] = rightEyeTransform
     }
 
     // MARK: - Private Methods

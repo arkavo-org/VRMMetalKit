@@ -31,7 +31,7 @@ import simd
 ///
 /// Role transitions are guarded by ``roleChangeHysteresisMs`` to prevent
 /// flickering when a character oscillates between roles.
-public class CharacterPrioritySystem {
+public final class CharacterPrioritySystem {
 
     // MARK: - Character Role
 

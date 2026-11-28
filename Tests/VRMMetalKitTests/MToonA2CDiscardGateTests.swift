@@ -48,7 +48,7 @@ final class MToonA2CDiscardGateTests: XCTestCase {
 
         // Pipeline selection picks the A2C variant for MASK + MSAA + opt-in.
         let pipeline = renderer.selectPipelineForDraw(
-            alphaMode: "mask",
+            alphaMode: .mask,
             isSkinned: false,
             debugWireframe: false
         )
@@ -60,7 +60,7 @@ final class MToonA2CDiscardGateTests: XCTestCase {
         // discard_fragment() check (which fires only on alphaMode == 1)
         // does not run.
         let uniformAlphaMode = renderer.alphaModeForUniform(
-            alphaMode: "mask",
+            alphaMode: .mask,
             isSkinned: false
         )
         XCTAssertEqual(uniformAlphaMode, 3,
@@ -80,13 +80,13 @@ final class MToonA2CDiscardGateTests: XCTestCase {
         let renderer = VRMRenderer(device: device, config: config)
 
         let pipeline = renderer.selectPipelineForDraw(
-            alphaMode: "mask", isSkinned: false, debugWireframe: false
+            alphaMode: .mask, isSkinned: false, debugWireframe: false
         )
         XCTAssertNotEqual(pipeline?.label, "mtoon_mask_a2c",
             "Without alphaToCoverageForMASK opt-in MASK must NOT route to A2C.")
 
         let uniformAlphaMode = renderer.alphaModeForUniform(
-            alphaMode: "mask", isSkinned: false
+            alphaMode: .mask, isSkinned: false
         )
         XCTAssertEqual(uniformAlphaMode, 1,
             "Without A2C opt-in, MASK upload must stay at alphaMode=1 " +
@@ -102,7 +102,7 @@ final class MToonA2CDiscardGateTests: XCTestCase {
         let renderer = VRMRenderer(device: device, config: config)
 
         let uniformAlphaMode = renderer.alphaModeForUniform(
-            alphaMode: "mask", isSkinned: false
+            alphaMode: .mask, isSkinned: false
         )
         XCTAssertEqual(uniformAlphaMode, 1,
             "A2C requires MSAA. sampleCount=1 must keep MASK at alphaMode=1 " +
@@ -118,7 +118,7 @@ final class MToonA2CDiscardGateTests: XCTestCase {
         let renderer = VRMRenderer(device: device, config: config)
 
         let uniformAlphaMode = renderer.alphaModeForUniform(
-            alphaMode: "mask", isSkinned: true
+            alphaMode: .mask, isSkinned: true
         )
         XCTAssertEqual(uniformAlphaMode, 3,
             "Skinned MASK under A2C must also upload alphaMode=3.")
@@ -131,7 +131,7 @@ final class MToonA2CDiscardGateTests: XCTestCase {
                                     alphaToCoverageForMASK: true)
         let renderer = VRMRenderer(device: device, config: config)
 
-        XCTAssertEqual(renderer.alphaModeForUniform(alphaMode: "blend", isSkinned: false), 2)
-        XCTAssertEqual(renderer.alphaModeForUniform(alphaMode: "opaque", isSkinned: false), 0)
+        XCTAssertEqual(renderer.alphaModeForUniform(alphaMode: .blend, isSkinned: false), 2)
+        XCTAssertEqual(renderer.alphaModeForUniform(alphaMode: .opaque, isSkinned: false), 0)
     }
 }

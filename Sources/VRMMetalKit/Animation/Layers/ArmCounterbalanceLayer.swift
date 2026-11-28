@@ -112,14 +112,18 @@ public final class ArmCounterbalanceLayer: AnimationLayer {
         }
     }
 
-    public func evaluate() -> LayerOutput {
-        guard !pending.isEmpty else { return LayerOutput() }
-        var bones: [VRMHumanoidBone: ProceduralBoneTransform] = [:]
-        for (bone, q) in pending { bones[bone] = ProceduralBoneTransform(rotation: q) }
+    public func evaluate(into output: inout LayerOutput) {
+        guard !pending.isEmpty else {
+            output.reset()
+            return
+        }
         // `.additive` so the brace multiplies on top of lower-priority clip
         // deltas (see PosturalContactLayer.evaluate) — `.blend(1.0)` would
         // replace the running delta and snap the arms out of the clip pose.
-        return LayerOutput(bones: bones, morphWeights: [:], blendMode: .additive)
+        output.reset(blendMode: .additive)
+        for (bone, q) in pending {
+            output.bones[bone] = ProceduralBoneTransform(rotation: q)
+        }
     }
 
     public func applyDirect(to model: VRMModel) {

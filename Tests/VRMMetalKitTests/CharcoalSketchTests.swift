@@ -618,7 +618,7 @@ final class CharcoalSketchTests: XCTestCase {
                                                 configure: { model, renderer in
             for material in model.materials {
                 material.baseColorTexture = nil
-                material.alphaMode = "BLEND"
+                material.alphaMode = .blend
                 material.transparentWithZWrite = false
                 material.mtoon?.outlineWidthMode = .none
             }
@@ -687,7 +687,7 @@ final class CharcoalSketchTests: XCTestCase {
                     guard let index = primitive.materialIndex, model.materials.indices.contains(index) else {
                         return false
                     }
-                    return model.materials[index].alphaMode.uppercased() == "BLEND"
+                    return model.materials[index].alphaMode == .blend
                 }
             }
         })
