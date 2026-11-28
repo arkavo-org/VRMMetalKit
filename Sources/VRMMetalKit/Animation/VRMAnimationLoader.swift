@@ -1102,10 +1102,9 @@ private func buildAnimationRestTransforms(document: GLTFDocument) -> [Int: RestT
 
 func buildModelRestTransforms(model: VRMModel?) -> [VRMHumanoidBone: RestTransform] {
     guard let model, let humanoid = model.humanoid else { return [:] }
-    guard let gltfNodes = model.gltf.nodes else { return [:] }
 
     // Build all-node rest transforms first so we can compute `W` for any
-    // humanoid bone by walking up the glTF parent chain — humanoid bones
+    // humanoid bone by walking up the parent chain — humanoid bones
     // generally have non-humanoid ancestors (armature root, scene root)
     // whose rotations contribute to `W`.
     // The rest (bind) pose is `VRMNode.initial*`: it is captured at load and,
@@ -1114,25 +1113,49 @@ func buildModelRestTransforms(model: VRMModel?) -> [VRMHumanoidBone: RestTransfo
     // onto the wrong frame. Fall back to the glTF node only when the runtime
     // node is absent.
     var allRest: [Int: RestTransform] = [:]
-    for (index, node) in gltfNodes.enumerated() {
-        if let runtimeNode = model.nodes[safe: index] {
-            allRest[index] = RestTransform(bindPoseOf: runtimeNode)
-        } else {
-            allRest[index] = RestTransform(node: node)
+    let parents: [Int: Int]
+    let nodeCount: Int
+
+    if let gltfNodes = model.gltf?.nodes {
+        nodeCount = gltfNodes.count
+        for (index, node) in gltfNodes.enumerated() {
+            if let runtimeNode = model.nodes[safe: index] {
+                allRest[index] = RestTransform(bindPoseOf: runtimeNode)
+            } else {
+                allRest[index] = RestTransform(node: node)
+            }
         }
+        parents = buildGLTFParentMap(nodes: gltfNodes)
+    } else {
+        guard !model.nodes.isEmpty else { return [:] }
+        nodeCount = model.nodes.count
+        var nodeIndexByID: [ObjectIdentifier: Int] = [:]
+        nodeIndexByID.reserveCapacity(nodeCount)
+        for (index, runtimeNode) in model.nodes.enumerated() {
+            nodeIndexByID[ObjectIdentifier(runtimeNode)] = index
+            allRest[index] = RestTransform(bindPoseOf: runtimeNode)
+        }
+        var runtimeParents: [Int: Int] = [:]
+        for (index, runtimeNode) in model.nodes.enumerated() {
+            if let parent = runtimeNode.parent,
+               let parentIdx = nodeIndexByID[ObjectIdentifier(parent)] {
+                runtimeParents[index] = parentIdx
+            }
+        }
+        parents = runtimeParents
     }
-    let parents = buildGLTFParentMap(nodes: gltfNodes)
+
     let localOnly = allRest
-    for index in gltfNodes.indices {
+    for index in 0..<nodeCount {
         allRest[index]?.worldRotation = computeWorldRotation(nodeIndex: index,
-                                                              parents: parents,
-                                                              restMap: localOnly)
+                                                             parents: parents,
+                                                             restMap: localOnly)
     }
 
     var map: [VRMHumanoidBone: RestTransform] = [:]
     for bone in VRMHumanoidBone.allCases {
         guard let nodeIndex = humanoid.getBoneNode(bone),
-              nodeIndex < gltfNodes.count else { continue }
+              nodeIndex < nodeCount else { continue }
         // Bind pose only, never the runtime transform (which animations mutate).
         map[bone] = allRest[nodeIndex]
     }

@@ -1989,6 +1989,11 @@ public final class VRMMaterial: @unchecked Sendable {
         }
     }
 
+    /// Creates a material programmatically without a glTF descriptor.
+    public init(name: String? = nil) {
+        self.name = name
+    }
+
     /// Creates a deep CPU clone of a material while remapping its `VRMTexture` wrappers.
     internal init(cloning other: VRMMaterial, remapTexture: (VRMTexture?) -> VRMTexture?) {
         self.name = other.name

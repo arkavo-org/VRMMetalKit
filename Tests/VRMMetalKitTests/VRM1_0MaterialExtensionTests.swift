@@ -96,12 +96,13 @@ final class VRM1_0MaterialExtensionTests: XCTestCase {
             .build()
 
         let vrmJSON = try buildVRMJSONWithMToon(vrm)
-        let binaryData = vrm.gltf.binaryBufferData ?? Data()
+        let binaryData = vrm.gltf?.binaryBufferData ?? Data()
         return try createGLB(json: vrmJSON, binaryData: binaryData)
     }
 
     private static func buildVRMJSONWithMToon(_ vrm: VRMModel) throws -> [String: Any] {
-        let gltfData = try JSONEncoder().encode(vrm.gltf)
+        let gltf = try XCTUnwrap(vrm.gltf)
+        let gltfData = try JSONEncoder().encode(gltf)
         var gltfDict = try JSONSerialization.jsonObject(with: gltfData) as! [String: Any]
 
         // Replace materials with MToon-extended versions

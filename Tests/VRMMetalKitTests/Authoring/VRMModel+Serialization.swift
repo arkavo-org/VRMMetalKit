@@ -34,7 +34,7 @@ extension VRMModel {
         let vrmJSON = try buildVRMJSON()
 
         // Get binary buffer data from glTF document
-        let binaryData = gltf.binaryBufferData ?? Data()
+        let binaryData = gltf?.binaryBufferData ?? Data()
 
         // Create GLB file with JSON + binary data
         let glbData = try createGLB(json: vrmJSON, binaryData: binaryData)
@@ -56,7 +56,7 @@ extension VRMModel {
         let vrmJSON = try buildVRMJSON()
 
         // Get binary buffer data from glTF document
-        let binaryData = gltf.binaryBufferData ?? Data()
+        let binaryData = gltf?.binaryBufferData ?? Data()
 
         // Create GLB file with JSON + binary data
         let glbData = try createGLB(json: vrmJSON, binaryData: binaryData)
@@ -68,6 +68,9 @@ extension VRMModel {
 
     private func buildVRMJSON() throws -> [String: Any] {
         // Start with glTF document
+        guard let gltf else {
+            throw VRMError.invalidEdit("Cannot serialize VRMModel without an attached GLTFDocument")
+        }
         let gltfData = try JSONEncoder().encode(gltf)
         var gltfDict = try JSONSerialization.jsonObject(with: gltfData) as! [String: Any]
 

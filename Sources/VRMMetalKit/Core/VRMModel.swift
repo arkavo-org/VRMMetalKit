@@ -103,7 +103,7 @@ public final class VRMModel: VRMSceneContent, @unchecked Sendable {
                 physicsRevision &+= 1
                 springBoneRevision &+= 1
             }
-            let shouldRecomputeBounds = editor.topologyDirty
+            let shouldRecomputeBounds = editor.topologyDirty || editor.boundsDirty
             lock.unlock()
             if shouldRecomputeBounds {
                 finalizeModelLocalBounds()
@@ -269,28 +269,38 @@ public final class VRMModel: VRMSceneContent, @unchecked Sendable {
 
     // MARK: - glTF Data
 
-    /// The underlying glTF document structure.
-    public var gltf: GLTFDocument
+    /// The underlying glTF document structure, retained only when constructed directly
+    /// with a document or loaded with ``VRMLoadingOptions/retainGLTFDocument`` set to `true`.
+    public var gltf: GLTFDocument?
+
+    /// Cached total byte length of the host model's binary buffers so cosmetic attachment
+    /// quota validation continues to work even after ``gltf`` is released.
+    internal var estimatedHostBufferBytes: Int = 0
 
     /// All meshes in the model, each containing one or more primitives.
-    public var meshes: [VRMMesh] = []
+    /// Mutate via ``edit(_:)`` to keep renderer revisions and bounds synchronized.
+    public internal(set) var meshes: [VRMMesh] = []
 
     /// All materials used by this model (MToon, PBR, or unlit).
-    public var materials: [VRMMaterial] = []
+    /// Mutate via ``edit(_:)`` to keep renderer revisions synchronized.
+    public internal(set) var materials: [VRMMaterial] = []
 
     /// All textures loaded for this model.
-    public var textures: [VRMTexture] = []
+    /// Mutate via ``edit(_:)`` to keep renderer revisions synchronized.
+    public internal(set) var textures: [VRMTexture] = []
 
     /// All nodes in the scene graph hierarchy.
     ///
     /// Nodes form a tree structure via `parent` and `children` properties.
     /// Each node has local and world transforms that can be animated.
-    public var nodes: [VRMNode] = [] {
+    /// Structural array mutations go through ``edit(_:)``.
+    public internal(set) var nodes: [VRMNode] = [] {
         didSet { springBoneRevision &+= 1 }
     }
 
     /// Skin data for skeletal animation (joint matrices, inverse bind matrices).
-    public var skins: [VRMSkin] = []
+    /// Mutate via ``edit(_:)`` to keep skin layout/content revisions synchronized.
+    public internal(set) var skins: [VRMSkin] = []
 
     // MARK: - Cosmetic Side Scenes & Body Masks
 
@@ -373,19 +383,111 @@ public final class VRMModel: VRMSceneContent, @unchecked Sendable {
 
     // MARK: - Initialization
 
-    /// Creates a VRM model from already-parsed VRM extension data and a glTF document.
+    /// Creates a VRM model from already-parsed VRM extension data and an optional glTF document.
     ///
     /// Application code rarely calls this directly — prefer
-    /// ``load(from:device:options:)`` which parses the file, populates GPU
-    /// resources, and wires up physics in one call.
+    /// ``load(from:device:options:)`` for loading `.vrm` files or ``make(specVersion:meta:humanoid:nodes:meshes:materials:textures:skins:expressions:firstPerson:lookAt:springBone:nodeConstraints:faceLandmarks:device:augmentSpringBoneColliders:limits:)``
+    /// for programmatic in-memory construction.
     public init(specVersion: VRMSpecVersion,
                 meta: VRMMeta,
                 humanoid: VRMHumanoid?,
-                gltf: GLTFDocument) {
+                gltf: GLTFDocument? = nil) {
         self.specVersion = specVersion
         self.meta = meta
         self.humanoid = humanoid
         self.gltf = gltf
+    }
+
+    /// Constructs a render-ready ``VRMModel`` directly from typed Swift scene objects
+    /// without building or parsing a ``GLTFDocument`` or GLB container.
+    ///
+    /// Designed for authoring hosts (such as `VRMAuthorKit`) that generate meshes, materials,
+    /// textures, skeletons, and physics data in memory. Builds the normalized node lookup table,
+    /// propagates bind-pose world transforms, sanitizes mesh skinning joint indices, initializes
+    /// SpringBone GPU buffers when a Metal device and physics data are provided, and precomputes
+    /// whole-model frustum bounds.
+    public static func make(
+        specVersion: VRMSpecVersion = .v1_0,
+        meta: VRMMeta,
+        humanoid: VRMHumanoid? = nil,
+        nodes: [VRMNode] = [],
+        meshes: [VRMMesh] = [],
+        materials: [VRMMaterial] = [],
+        textures: [VRMTexture] = [],
+        skins: [VRMSkin] = [],
+        expressions: VRMExpressions? = nil,
+        firstPerson: VRMFirstPerson? = nil,
+        lookAt: VRMLookAt? = nil,
+        springBone: VRMSpringBone? = nil,
+        nodeConstraints: [VRMNodeConstraint] = [],
+        faceLandmarks: VRMFaceLandmarks? = nil,
+        device: MTLDevice? = nil,
+        augmentSpringBoneColliders: Bool = true,
+        limits: VRMLoaderLimits = .default
+    ) throws -> VRMModel {
+        let model = VRMModel(
+            specVersion: specVersion,
+            meta: meta,
+            humanoid: humanoid,
+            gltf: nil
+        )
+        model.device = device
+        model.nodes = nodes
+        model.meshes = meshes
+        model.materials = materials
+        model.textures = textures
+        model.skins = skins
+        model.expressions = expressions
+        model.firstPerson = firstPerson
+        model.lookAt = lookAt
+        model.springBone = springBone
+        model.nodeConstraints = nodeConstraints
+        model.faceLandmarks = faceLandmarks
+
+        model.buildNodeLookupTable()
+        for node in model.nodes where node.parent == nil {
+            node.updateWorldTransform()
+        }
+
+        VRMResourceLoader.sanitizeAllMeshJoints(
+            nodes: model.nodes,
+            meshes: model.meshes,
+            skins: model.skins
+        )
+
+        var bufferBytes = 0
+        for mesh in model.meshes {
+            for primitive in mesh.primitives {
+                bufferBytes += primitive.vertexBuffer?.length ?? 0
+                bufferBytes += primitive.attributeBuffer?.length ?? 0
+                bufferBytes += primitive.indexBuffer?.length ?? 0
+                bufferBytes += primitive.morphPositionsSoA?.length ?? 0
+                bufferBytes += primitive.morphNormalsSoA?.length ?? 0
+            }
+        }
+        model.estimatedHostBufferBytes = bufferBytes
+
+        if model.springBone != nil {
+            model.expandVRM0SpringBoneChains()
+            let totalBones = model.springBone?.springs.reduce(0) { $0 + $1.joints.count } ?? 0
+            if totalBones > limits.maxSpringBones {
+                throw VRMError.limitExceeded(
+                    kind: "springBones",
+                    limit: limits.maxSpringBones,
+                    observed: totalBones
+                )
+            }
+            if let device {
+                try model.initializeSpringBoneGPUSystem(
+                    device: device,
+                    augmentColliders: augmentSpringBoneColliders,
+                    limits: limits
+                )
+            }
+        }
+
+        model.finalizeModelLocalBounds()
+        return model
     }
 
     // MARK: - Bounding Box Calculation
@@ -884,14 +986,20 @@ public final class VRMModel: VRMSceneContent, @unchecked Sendable {
         model.baseURL = baseURL
         model.device = device
         model.faceLandmarks = VRMFaceLandmarks.parse(from: document)
+        model.estimatedHostBufferBytes = document.buffers?.reduce(0) { $0 + max(0, $1.byteLength) } ?? 0
         
         await context?.updatePhase(.parsingVRMExtension, progress: 1.0)
         
         // Load resources with buffer data
         do {
-            try await model.loadResources(binaryData: binaryData, context: context, limits: limits)
+            try await model.loadResources(document: document, binaryData: binaryData, context: context, limits: limits)
         } catch GLTFError.limitExceeded(let kind, let limit, let observed) {
             throw VRMError.limitExceeded(kind: kind, limit: limit, observed: observed)
+        }
+
+        // Release parsed glTF AST by default after resources are materialized to reduce memory footprint.
+        if !(context?.options.retainGLTFDocument ?? false) {
+            model.gltf = nil
         }
 
         // Enforce spring-bone quota even on CPU-only (device == nil) loads.
@@ -925,12 +1033,13 @@ public final class VRMModel: VRMSceneContent, @unchecked Sendable {
     }
 
     private func loadResources(
+        document: GLTFDocument,
         binaryData: Data? = nil,
         context: VRMLoadingContext? = nil,
         limits: VRMLoaderLimits = .default
     ) async throws {
         let loaded = try await VRMResourceLoader.load(
-            document: gltf,
+            document: document,
             binaryData: binaryData,
             baseURL: baseURL,
             device: device,
@@ -951,7 +1060,7 @@ public final class VRMModel: VRMSceneContent, @unchecked Sendable {
         buildNodeLookupTable()
     }
 
-    private func buildNodeLookupTable() {
+    internal func buildNodeLookupTable() {
         nodeLookupTable.removeAll()
         for node in nodes {
             guard let name = node.name else { continue }

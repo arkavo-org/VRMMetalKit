@@ -381,6 +381,41 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
         return texture
     }
 
+    /// Uploads raw straight-alpha RGBA8 pixel bytes directly to a Metal texture without
+    /// PNG encoding or ImageIO decoding.
+    public static func makeTexture(
+        rgba8Data: Data,
+        width: Int,
+        height: Int,
+        bytesPerRow: Int? = nil,
+        device: MTLDevice,
+        sRGB: Bool = true,
+        mipmapped: Bool = false,
+        label: String? = nil
+    ) throws -> MTLTexture {
+        guard width > 0, height > 0 else {
+            throw VRMCosmeticError.invalidCanvasSize(width: width, height: height)
+        }
+        let pixelFormat: MTLPixelFormat = sRGB ? .rgba8Unorm_srgb : .rgba8Unorm
+        guard let texture = TextureUploader.makeTexture(
+            rgba8Data: rgba8Data,
+            width: width,
+            height: height,
+            bytesPerRow: bytesPerRow,
+            pixelFormat: pixelFormat,
+            device: device,
+            mipmapped: mipmapped
+        ) else {
+            throw VRMCosmeticError.textureAllocationFailed(
+                width: width,
+                height: height,
+                pixelFormat: pixelFormat
+            )
+        }
+        texture.label = label ?? "Cosmetic Layer RGBA8 (\(width)x\(height))"
+        return texture
+    }
+
     // MARK: - Pixel Format Validation
 
     /// Returns `true` when `format` can be hardware-sampled as a normalized/float color texture
@@ -677,27 +712,11 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
 
     // MARK: - Material Application, Linked Shade Sync & Clean Restore
 
-    /// Composites this layer stack onto `material`'s `slot` (non-destructively from its original base texture).
-    ///
-    /// When `slot == .baseColor`:
-    /// - Automatically keeps a linked MToon `shadeMultiplyTexture` in sync (both when sharing the same
-    ///   `VRMTexture` wrapper and when two distinct wrappers referenced the same original `MTLTexture`),
-    ///   preserving the shader's `shadeUsesBaseColor` fast path.
-    /// - When any visible layer has a ``VRMFinishOverride``, attaches the composited per-pixel finish map
-    ///   to `material.metallicRoughnessTexture` and restores original finish state if finish layers are removed.
-    ///   By default (`preserveAuthoredFinish == false`), unpainted texels seed as matte (`roughness = 1`,
-    ///   `metallic = 0`) so VRoid/UniVRM default `metallicFactor = 1.0` exports do not turn unpainted skin metallic.
-    ///   Pass `preserveAuthoredFinish: true` to seed unpainted texels from the material's authored
-    ///   `metallicRoughnessTexture` and factors.
-    public func apply(
-        to material: VRMMaterial,
-        slot: VRMTextureSlot = .baseColor,
-        in model: VRMModel? = nil,
-        width: Int? = nil,
-        height: Int? = nil,
-        preserveAuthoredFinish: Bool = false,
-        commandQueue: MTLCommandQueue? = nil
-    ) throws {
+    private func captureOrGetBinding(
+        for material: VRMMaterial,
+        slot: VRMTextureSlot,
+        model: VRMModel?
+    ) -> (key: MaterialBindingKey, state: MaterialBindingState) {
         let key = MaterialBindingKey(materialID: ObjectIdentifier(material), slot: slot)
         let state: MaterialBindingState
         if let existing = bindings[key] {
@@ -737,20 +756,17 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
         if faceLandmarks == nil, let modelLandmarks = model?.faceLandmarks {
             faceLandmarks = modelLandmarks
         }
+        return (key, state)
+    }
 
-        let seedAuthored = slot == .baseColor && preserveAuthoredFinish
-        let result = try compositeInternal(
-            baseTexture: state.originalBaseMTLTexture,
-            width: width,
-            height: height,
-            sRGB: true,
-            baseFinishTexture: seedAuthored ? state.originalMetallicRoughnessTexture?.mtlTexture : nil,
-            baseFinishMetallicFactor: seedAuthored ? state.originalMetallicFactor : nil,
-            baseFinishRoughnessFactor: seedAuthored ? state.originalRoughnessFactor : nil,
-            bindingKey: key,
-            commandQueue: commandQueue
-        )
-
+    private func commitMaterialMutation(
+        result: (color: MTLTexture, finish: MTLTexture?),
+        material: VRMMaterial,
+        slot: VRMTextureSlot,
+        key: MaterialBindingKey,
+        state: MaterialBindingState,
+        model: VRMModel?
+    ) {
         let applyMutation: () -> Void = {
             switch slot {
             case .baseColor:
@@ -809,6 +825,143 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
         } else {
             applyMutation()
         }
+    }
+
+    /// Encodes GPU compositing onto `commandBuffer` without committing or blocking the CPU,
+    /// and binds the resulting triple-buffered output texture(s) onto `material`'s `slot`.
+    ///
+    /// Call before encoding render passes into the same `commandBuffer` (or an earlier command
+    /// buffer on the same queue) so Metal orders the compute and mipmap passes before sampling
+    /// with zero CPU-GPU stalls.
+    @discardableResult
+    public func encodeApply(
+        to material: VRMMaterial,
+        slot: VRMTextureSlot = .baseColor,
+        in model: VRMModel? = nil,
+        width: Int? = nil,
+        height: Int? = nil,
+        preserveAuthoredFinish: Bool = false,
+        commandBuffer: MTLCommandBuffer
+    ) throws -> (color: MTLTexture, finish: MTLTexture?) {
+        let (key, state) = captureOrGetBinding(for: material, slot: slot, model: model)
+        let seedAuthored = slot == .baseColor && preserveAuthoredFinish
+        let result = try encodeCompositeInternal(
+            baseTexture: state.originalBaseMTLTexture,
+            width: width,
+            height: height,
+            sRGB: true,
+            baseFinishTexture: seedAuthored ? state.originalMetallicRoughnessTexture?.mtlTexture : nil,
+            baseFinishMetallicFactor: seedAuthored ? state.originalMetallicFactor : nil,
+            baseFinishRoughnessFactor: seedAuthored ? state.originalRoughnessFactor : nil,
+            bindingKey: key,
+            commandBuffer: commandBuffer
+        )
+        commitMaterialMutation(
+            result: result,
+            material: material,
+            slot: slot,
+            key: key,
+            state: state,
+            model: model
+        )
+        return result
+    }
+
+    /// Asynchronously composites this layer stack onto `material`'s `slot` without blocking
+    /// the calling thread, suspending until GPU completion before updating the material.
+    @discardableResult
+    public func applyAsync(
+        to material: VRMMaterial,
+        slot: VRMTextureSlot = .baseColor,
+        in model: VRMModel? = nil,
+        width: Int? = nil,
+        height: Int? = nil,
+        preserveAuthoredFinish: Bool = false,
+        commandQueue: MTLCommandQueue? = nil
+    ) async throws -> (color: MTLTexture, finish: MTLTexture?) {
+        let (key, state) = captureOrGetBinding(for: material, slot: slot, model: model)
+        guard let queue = commandQueue ?? defaultCommandQueue,
+              let commandBuffer = queue.makeCommandBuffer() else {
+            throw VRMCosmeticError.commandEncodingFailed("Failed to create command buffer")
+        }
+        commandBuffer.label = "VRM Cosmetic Composite Async"
+        let seedAuthored = slot == .baseColor && preserveAuthoredFinish
+        let result = try encodeCompositeInternal(
+            baseTexture: state.originalBaseMTLTexture,
+            width: width,
+            height: height,
+            sRGB: true,
+            baseFinishTexture: seedAuthored ? state.originalMetallicRoughnessTexture?.mtlTexture : nil,
+            baseFinishMetallicFactor: seedAuthored ? state.originalMetallicFactor : nil,
+            baseFinishRoughnessFactor: seedAuthored ? state.originalRoughnessFactor : nil,
+            bindingKey: key,
+            commandBuffer: commandBuffer
+        )
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            commandBuffer.addCompletedHandler { cb in
+                if let error = cb.error {
+                    continuation.resume(throwing: VRMCosmeticError.commandEncodingFailed(error.localizedDescription))
+                } else {
+                    continuation.resume(returning: ())
+                }
+            }
+            commandBuffer.commit()
+        }
+
+        commitMaterialMutation(
+            result: result,
+            material: material,
+            slot: slot,
+            key: key,
+            state: state,
+            model: model
+        )
+        return result
+    }
+
+    /// Composites this layer stack onto `material`'s `slot` (non-destructively from its original base texture).
+    ///
+    /// When `slot == .baseColor`:
+    /// - Automatically keeps a linked MToon `shadeMultiplyTexture` in sync (both when sharing the same
+    ///   `VRMTexture` wrapper and when two distinct wrappers referenced the same original `MTLTexture`),
+    ///   preserving the shader's `shadeUsesBaseColor` fast path.
+    /// - When any visible layer has a ``VRMFinishOverride``, attaches the composited per-pixel finish map
+    ///   to `material.metallicRoughnessTexture` and restores original finish state if finish layers are removed.
+    ///   By default (`preserveAuthoredFinish == false`), unpainted texels seed as matte (`roughness = 1`,
+    ///   `metallic = 0`) so VRoid/UniVRM default `metallicFactor = 1.0` exports do not turn unpainted skin metallic.
+    ///   Pass `preserveAuthoredFinish: true` to seed unpainted texels from the material's authored
+    ///   `metallicRoughnessTexture` and factors.
+    public func apply(
+        to material: VRMMaterial,
+        slot: VRMTextureSlot = .baseColor,
+        in model: VRMModel? = nil,
+        width: Int? = nil,
+        height: Int? = nil,
+        preserveAuthoredFinish: Bool = false,
+        commandQueue: MTLCommandQueue? = nil
+    ) throws {
+        let (key, state) = captureOrGetBinding(for: material, slot: slot, model: model)
+        let seedAuthored = slot == .baseColor && preserveAuthoredFinish
+        let result = try compositeInternal(
+            baseTexture: state.originalBaseMTLTexture,
+            width: width,
+            height: height,
+            sRGB: true,
+            baseFinishTexture: seedAuthored ? state.originalMetallicRoughnessTexture?.mtlTexture : nil,
+            baseFinishMetallicFactor: seedAuthored ? state.originalMetallicFactor : nil,
+            baseFinishRoughnessFactor: seedAuthored ? state.originalRoughnessFactor : nil,
+            bindingKey: key,
+            commandQueue: commandQueue
+        )
+        commitMaterialMutation(
+            result: result,
+            material: material,
+            slot: slot,
+            key: key,
+            state: state,
+            model: model
+        )
     }
 
     /// Restores `material`'s `slot` (including any synced `shadeMultiplyTexture` and finish map)

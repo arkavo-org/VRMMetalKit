@@ -34,9 +34,11 @@ public final class GLTFDocumentBuilder {
     private var skins: [GLTFSkin] = []
     private var animations: [GLTFAnimation] = []
     private var extensions: [String: Any] = [:]
+    private var extras: [String: Any] = [:]
     private var extensionsUsed: [String] = []
     private var extensionsRequired: [String] = []
     private var defaultScene: Int = 0
+    private var binaryBufferData: Data?
 
     /// Creates an empty builder. ``setAsset(_:)`` must be called before ``build()``.
     public init() {}
@@ -155,6 +157,20 @@ public final class GLTFDocumentBuilder {
         return self
     }
 
+    /// Sets the document's top-level `extras` dictionary.
+    @discardableResult
+    public func setExtras(_ extras: [String: Any]) -> GLTFDocumentBuilder {
+        self.extras = extras
+        return self
+    }
+
+    /// Sets the in-memory GLB binary chunk backing buffer index 0.
+    @discardableResult
+    public func setBinaryBufferData(_ data: Data?) -> GLTFDocumentBuilder {
+        self.binaryBufferData = data
+        return self
+    }
+
     /// Sets the index of the default scene that consumers should open.
     @discardableResult
     public func setDefaultScene(_ index: Int) -> GLTFDocumentBuilder {
@@ -164,7 +180,7 @@ public final class GLTFDocumentBuilder {
 
     // MARK: - Build
 
-    /// Assembles the configured fields into a ``GLTFDocument``.
+    /// Assembles the configured fields directly into a ``GLTFDocument`` without JSON serialization.
     ///
     /// - Throws: `BuilderError.missingAsset` when ``setAsset(_:)`` was not called.
     public func build() throws -> GLTFDocument {
@@ -172,9 +188,7 @@ public final class GLTFDocumentBuilder {
             throw BuilderError.missingAsset
         }
 
-        // Create a custom document since GLTFDocument's init is Codable
-        // We'll use reflection to build it
-        let document = MinimalGLTFDocument(
+        return GLTFDocument(
             asset: asset,
             scene: scenes.isEmpty ? nil : defaultScene,
             scenes: scenes.isEmpty ? nil : scenes,
@@ -190,157 +204,21 @@ public final class GLTFDocumentBuilder {
             skins: skins.isEmpty ? nil : skins,
             animations: animations.isEmpty ? nil : animations,
             extensions: extensions.isEmpty ? nil : extensions,
+            extras: extras.isEmpty ? nil : extras,
             extensionsUsed: extensionsUsed.isEmpty ? nil : extensionsUsed,
-            extensionsRequired: extensionsRequired.isEmpty ? nil : extensionsRequired
+            extensionsRequired: extensionsRequired.isEmpty ? nil : extensionsRequired,
+            binaryBufferData: binaryBufferData
         )
-
-        return try document.toGLTFDocument()
     }
 
-    enum BuilderError: Error, LocalizedError {
+    public enum BuilderError: Error, LocalizedError {
         case missingAsset
-        /// The assembled builder state could not be round-tripped through JSON
-        /// into a `GLTFDocument` (e.g. a non-finite number or non-encodable
-        /// value reached `JSONSerialization`/`JSONDecoder`).
-        case documentRoundTripFailed(underlying: Error)
 
-        var errorDescription: String? {
+        public var errorDescription: String? {
             switch self {
             case .missingAsset:
                 return "GLTFDocumentBuilder: setAsset(_:) must be called before build()."
-            case .documentRoundTripFailed(let underlying):
-                return "GLTFDocumentBuilder: failed to serialize the assembled document " +
-                       "(check for non-finite numbers or invalid values in accessors/materials). " +
-                       "Underlying error: \(underlying.localizedDescription)"
             }
         }
-    }
-}
-
-// MARK: - Minimal Document Helper
-
-/// Helper struct for building glTF documents
-private struct MinimalGLTFDocument {
-    let asset: GLTFAsset
-    let scene: Int?
-    let scenes: [GLTFScene]?
-    let nodes: [GLTFNode]?
-    let meshes: [GLTFMesh]?
-    let materials: [GLTFMaterial]?
-    let textures: [GLTFTexture]?
-    let images: [GLTFImage]?
-    let samplers: [GLTFSampler]?
-    let buffers: [GLTFBuffer]?
-    let bufferViews: [GLTFBufferView]?
-    let accessors: [GLTFAccessor]?
-    let skins: [GLTFSkin]?
-    let animations: [GLTFAnimation]?
-    let extensions: [String: Any]?
-    let extensionsUsed: [String]?
-    let extensionsRequired: [String]?
-
-    func toGLTFDocument() throws -> GLTFDocument {
-        // Encode to JSON, then decode back to GLTFDocument
-        // This is a workaround since GLTFDocument uses Codable init
-
-        let dict: [String: Any] = [
-            "asset": encodeAsset(asset),
-            "scene": scene as Any,
-            "scenes": scenes?.map(encodeScene) as Any,
-            "nodes": nodes?.map(encodeNode) as Any,
-            "meshes": meshes?.map(encodeMesh) as Any,
-            "materials": materials?.map(encodeMaterial) as Any,
-            "textures": textures as Any,
-            "images": images as Any,
-            "samplers": samplers as Any,
-            "buffers": buffers as Any,
-            "bufferViews": bufferViews as Any,
-            "accessors": accessors as Any,
-            "skins": skins as Any,
-            "animations": animations as Any,
-            "extensions": extensions as Any,
-            "extensionsUsed": extensionsUsed as Any,
-            "extensionsRequired": extensionsRequired as Any
-        ].compactMapValues { $0 }
-
-        do {
-            let jsonData = try JSONSerialization.data(withJSONObject: dict)
-            return try JSONDecoder().decode(GLTFDocument.self, from: jsonData)
-        } catch {
-            throw GLTFDocumentBuilder.BuilderError.documentRoundTripFailed(underlying: error)
-        }
-    }
-
-    private func encodeAsset(_ asset: GLTFAsset) -> [String: Any] {
-        var dict: [String: Any] = ["version": asset.version]
-        if let gen = asset.generator { dict["generator"] = gen }
-        if let copy = asset.copyright { dict["copyright"] = copy }
-        if let min = asset.minVersion { dict["minVersion"] = min }
-        return dict
-    }
-
-    private func encodeScene(_ scene: GLTFScene) -> [String: Any] {
-        var dict: [String: Any] = [:]
-        if let name = scene.name { dict["name"] = name }
-        if let nodes = scene.nodes { dict["nodes"] = nodes }
-        return dict
-    }
-
-    private func encodeNode(_ node: GLTFNode) -> [String: Any] {
-        var dict: [String: Any] = [:]
-        if let name = node.name { dict["name"] = name }
-        if let children = node.children { dict["children"] = children }
-        if let matrix = node.matrix { dict["matrix"] = matrix }
-        if let translation = node.translation { dict["translation"] = translation }
-        if let rotation = node.rotation { dict["rotation"] = rotation }
-        if let scale = node.scale { dict["scale"] = scale }
-        if let mesh = node.mesh { dict["mesh"] = mesh }
-        if let skin = node.skin { dict["skin"] = skin }
-        if let weights = node.weights { dict["weights"] = weights }
-        return dict
-    }
-
-    private func encodeMesh(_ mesh: GLTFMesh) -> [String: Any] {
-        var dict: [String: Any] = [
-            "primitives": mesh.primitives.map(encodePrimitive)
-        ]
-        if let name = mesh.name { dict["name"] = name }
-        if let weights = mesh.weights { dict["weights"] = weights }
-        return dict
-    }
-
-    private func encodePrimitive(_ primitive: GLTFPrimitive) -> [String: Any] {
-        var dict: [String: Any] = [
-            "attributes": primitive.attributes
-        ]
-        if let indices = primitive.indices { dict["indices"] = indices }
-        if let material = primitive.material { dict["material"] = material }
-        if let mode = primitive.mode { dict["mode"] = mode }
-        return dict
-    }
-
-    private func encodeMaterial(_ material: GLTFMaterial) -> [String: Any] {
-        var dict: [String: Any] = [:]
-        if let name = material.name { dict["name"] = name }
-        if let pbr = material.pbrMetallicRoughness {
-            dict["pbrMetallicRoughness"] = encodePBR(pbr)
-        }
-        if let alphaMode = material.alphaMode { dict["alphaMode"] = alphaMode }
-        dict["doubleSided"] = material.doubleSided
-        return dict
-    }
-
-    private func encodePBR(_ pbr: GLTFPBRMetallicRoughness) -> [String: Any] {
-        var dict: [String: Any] = [:]
-        if let baseColorFactor = pbr.baseColorFactor {
-            dict["baseColorFactor"] = baseColorFactor
-        }
-        if let metallicFactor = pbr.metallicFactor {
-            dict["metallicFactor"] = metallicFactor
-        }
-        if let roughnessFactor = pbr.roughnessFactor {
-            dict["roughnessFactor"] = roughnessFactor
-        }
-        return dict
     }
 }
