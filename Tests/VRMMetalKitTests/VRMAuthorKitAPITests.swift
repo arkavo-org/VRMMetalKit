@@ -223,9 +223,11 @@ final class VRMAuthorKitAPITests: XCTestCase {
         )
 
         let initialTopologyRev = model.topologyRevision
+        let initialGeometryRev = model.geometryRevision
         let initialVB = primitive.vertexBuffer
 
-        // 1. In-place position update does NOT reallocate vertexBuffer or bump topologyRevision
+        // 1. Copy-on-write position update publishes a fresh MTLBuffer (preventing in-flight GPU races),
+        // bumps geometryRevision without bumping topologyRevision, and updates basePositionsBuffer + bounds
         try model.edit { editor in
             try editor.updatePositions(
                 [[0, 0, 0], [2, 0, 0], [0, 3, 0]],
@@ -233,13 +235,14 @@ final class VRMAuthorKitAPITests: XCTestCase {
                 primitiveIndex: 0
             )
         }
-        XCTAssertTrue(primitive.vertexBuffer === initialVB, "In-place position update should reuse existing MTLBuffer")
+        XCTAssertTrue(primitive.vertexBuffer !== initialVB, "Position update must publish a fresh MTLBuffer to avoid racing in-flight GPU reads")
         XCTAssertEqual(model.topologyRevision, initialTopologyRev)
+        XCTAssertEqual(model.geometryRevision, initialGeometryRev + 1)
         XCTAssertEqual(model.modelLocalBounds.max, SIMD3<Float>(2, 3, 0))
         let basePtr = try XCTUnwrap(primitive.basePositionsBuffer).contents().bindMemory(to: SIMD3<Float>.self, capacity: 3)
         XCTAssertEqual(basePtr[2], SIMD3<Float>(0, 3, 0))
 
-        // 2. Same-count updateVertices reuses buffer; different-count reallocates and bumps topologyRevision
+        // 2. Resizing vertices rebuilds morph SoA buffers for the new vertexCount and bumps topologyRevision
         try model.edit { editor in
             try editor.updateVertices([
                 VRMVertex(position: [0, 0, 0], normal: [0, 0, 1]),
@@ -251,14 +254,19 @@ final class VRMAuthorKitAPITests: XCTestCase {
         XCTAssertEqual(primitive.vertexCount, 4)
         XCTAssertEqual(model.topologyRevision, initialTopologyRev + 1)
         XCTAssertEqual(model.modelLocalBounds.max, SIMD3<Float>(4, 5, 1))
+        XCTAssertEqual(
+            primitive.morphPositionsSoA?.length,
+            4 * MemoryLayout<SIMD3<Float>>.stride,
+            "Resizing vertices must rebuild morphPositionsSoA for the new vertexCount"
+        )
 
         // 3. Bind pose + IBM update bumps skinContentRevision without bumping skinLayoutRevision
         let skinLayoutBefore = model.skinLayoutRevision
         let skinContentBefore = model.skinContentRevision
         let newIBM = float4x4(translation: [0, -1.2, 0])
-        model.edit { editor in
+        try model.edit { editor in
             editor.updateNodeBindPose(at: 0, translation: [0, 1.2, 0])
-            editor.updateSkinInverseBindMatrices([newIBM, matrix_identity_float4x4], skinIndex: 0)
+            try editor.updateSkinInverseBindMatrices([newIBM, matrix_identity_float4x4], skinIndex: 0)
         }
         XCTAssertEqual(model.skinLayoutRevision, skinLayoutBefore)
         XCTAssertEqual(model.skinContentRevision, skinContentBefore + 1)
@@ -267,6 +275,11 @@ final class VRMAuthorKitAPITests: XCTestCase {
         XCTAssertEqual(child.worldPosition.y, 1.4, accuracy: 1e-5)
         XCTAssertEqual(child.worldPosition.z, 0, accuracy: 1e-5)
         XCTAssertEqual(model.skins[0].inverseBindMatrices[0], newIBM)
+
+        // Mismatched IBM count must throw VRMError.invalidEdit
+        XCTAssertThrowsError(try model.edit { editor in
+            try editor.updateSkinInverseBindMatrices([newIBM], skinIndex: 0)
+        })
 
         // 4. Replace SpringBone live & add structural elements
         let physBefore = model.physicsRevision
@@ -278,7 +291,7 @@ final class VRMAuthorKitAPITests: XCTestCase {
             try editor.replaceSpringBone(sb, augmentColliders: false)
             let newMatIdx = editor.addMaterial(VRMMaterial(name: "AddedMat"))
             XCTAssertEqual(newMatIdx, 1)
-            let newNodeIdx = editor.addNode(VRMNode(index: 2, name: "Added_Node", translation: [1, 0, 0]), parentIndex: 0)
+            let newNodeIdx = try editor.addNode(VRMNode(index: 2, name: "Added_Node", translation: [1, 0, 0]), parentIndex: 0)
             XCTAssertEqual(newNodeIdx, 2)
         }
         XCTAssertGreaterThan(model.physicsRevision, physBefore)
@@ -286,6 +299,31 @@ final class VRMAuthorKitAPITests: XCTestCase {
         XCTAssertEqual(model.materials.count, 2)
         XCTAssertEqual(model.nodes.count, 3)
         XCTAssertEqual(model.findNodeByNormalizedName("addednode")?.index, 2)
+
+        // 5. Failed replaceSpringBone rolls back to previous working state
+        let workingBuffers = model.springBoneBuffers
+        var tooManySprings = VRMSpringBone()
+        var bigSpring = VRMSpring(name: "TooBig")
+        bigSpring.joints = [VRMSpringJoint(node: 0), VRMSpringJoint(node: 1), VRMSpringJoint(node: 2)]
+        tooManySprings.springs = [bigSpring]
+        let tightLimits = VRMLoaderLimits(maxSpringBones: 2)
+        XCTAssertThrowsError(try model.edit { editor in
+            try editor.replaceSpringBone(tooManySprings, augmentColliders: false, limits: tightLimits)
+        })
+        XCTAssertTrue(model.springBoneBuffers === workingBuffers, "Failed replaceSpringBone must preserve previous working buffers")
+
+        // 6. addNode rejects self-parenting (parentIndex == pre-append count) without stack overflow
+        let preCount = model.nodes.count
+        XCTAssertThrowsError(try model.edit { editor in
+            _ = try editor.addNode(VRMNode(index: preCount, name: "SelfCycle"), parentIndex: preCount)
+        })
+        XCTAssertEqual(model.nodes.count, preCount)
+
+        // 7. AnyCodable freezes mutable Foundation containers
+        let mutableDict = NSMutableDictionary(dictionary: ["key": "before"])
+        let frozen = AnyCodable(mutableDict)
+        mutableDict["key"] = "after"
+        XCTAssertEqual((frozen.value as? [String: Any])?["key"] as? String, "before")
     }
 
     // MARK: - #10: Non-Blocking VRMTextureLayerStack & Raw RGBA8 Layer Upload

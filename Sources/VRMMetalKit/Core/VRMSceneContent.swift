@@ -48,6 +48,7 @@ public final class VRMModelEditor {
     internal var skinContentDirty = false
     internal var physicsDirty = false
     internal var boundsDirty = false
+    internal var geometryDirty = false
 
     internal init(model: VRMModel) {
         self.model = model
@@ -178,15 +179,18 @@ public final class VRMModelEditor {
 
     // MARK: - Live Geometry, Rig & Physics Editing
 
-    /// Updates vertex positions in place on the specified mesh primitive without reallocating
-    /// GPU buffers or triggering a topology rebuild.
+    /// Publishes updated vertex positions on the specified mesh primitive using copy-on-write
+    /// buffer replacement so in-flight GPU frames keep reading the previous buffer safely
+    /// without triggering a topology rebuild.
     ///
-    /// Also updates ``VRMPrimitive/basePositionsBuffer`` (if morph targets are present) and
-    /// recomputes the primitive's local AABB so whole-model frustum bounds refresh on edit exit.
+    /// Also publishes a replacement ``VRMPrimitive/basePositionsBuffer`` (when morph targets
+    /// are present), recomputes the primitive's local AABB, and bumps ``VRMModel/geometryRevision``
+    /// so cached morph outputs invalidate on the next draw.
     public func updatePositions(
         _ positions: [SIMD3<Float>],
         meshIndex: Int,
-        primitiveIndex: Int
+        primitiveIndex: Int,
+        device: MTLDevice? = nil
     ) throws {
         guard meshIndex >= 0 && meshIndex < model.meshes.count else {
             throw VRMError.invalidEdit("meshIndex \(meshIndex) out of bounds (count: \(model.meshes.count))")
@@ -199,34 +203,57 @@ public final class VRMModelEditor {
         guard positions.count == primitive.vertexCount else {
             throw VRMError.invalidEdit("Position count \(positions.count) does not match primitive vertexCount \(primitive.vertexCount)")
         }
-        guard let vertexBuffer = primitive.vertexBuffer else {
-            throw VRMError.invalidEdit("Primitive (\(meshIndex), \(primitiveIndex)) has no GPU vertexBuffer to update in place")
+        guard let existingVB = primitive.vertexBuffer else {
+            throw VRMError.invalidEdit("Primitive (\(meshIndex), \(primitiveIndex)) has no GPU vertexBuffer to update")
         }
 
         if !positions.isEmpty {
-            let posPtr = vertexBuffer.contents().bindMemory(to: VRMPositionVertex.self, capacity: positions.count)
-            let basePtr = primitive.basePositionsBuffer?.contents().bindMemory(to: SIMD3<Float>.self, capacity: positions.count)
+            let targetDevice = device ?? model.device ?? existingVB.device
+            let posVertices = positions.map { VRMPositionVertex(position: $0) }
+            guard let newVB = posVertices.withUnsafeBytes({ bytes in
+                targetDevice.makeBuffer(bytes: bytes.baseAddress!, length: bytes.count, options: .storageModeShared)
+            }) else {
+                throw VRMError.invalidEdit("Failed to allocate replacement position vertex buffer (\(positions.count) vertices)")
+            }
+            newVB.label = existingVB.label
+
+            var newBasePos: MTLBuffer? = nil
+            if let existingBase = primitive.basePositionsBuffer {
+                guard let allocated = positions.withUnsafeBytes({ bytes in
+                    targetDevice.makeBuffer(bytes: bytes.baseAddress!, length: bytes.count, options: .storageModeShared)
+                }) else {
+                    throw VRMError.invalidEdit("Failed to allocate replacement morph base positions buffer (\(positions.count) vertices)")
+                }
+                allocated.label = existingBase.label
+                newBasePos = allocated
+            }
+
             var lo = positions[0]
             var hi = positions[0]
-            for i in 0..<positions.count {
-                let p = positions[i]
-                posPtr[i].position = p
-                basePtr?[i] = p
+            for p in positions {
                 lo = simd_min(lo, p)
                 hi = simd_max(hi, p)
+            }
+            primitive.vertexBuffer = newVB
+            if let newBasePos {
+                primitive.basePositionsBuffer = newBasePos
             }
             primitive.localMin = lo
             primitive.localMax = hi
         }
+        geometryDirty = true
         boundsDirty = true
     }
 
-    /// Updates all vertex streams on the specified mesh primitive.
+    /// Publishes updated vertex streams on the specified mesh primitive using copy-on-write
+    /// buffer replacement so in-flight GPU frames never race with CPU writes.
     ///
-    /// When `vertices.count == primitive.vertexCount` and both split GPU buffers exist,
-    /// writes directly in place without reallocating buffers or bumping ``VRMModel/topologyRevision``.
-    /// Otherwise reallocates the split GPU buffers via ``VRMPrimitive/uploadVertices(_:device:)``
-    /// and marks topology modified.
+    /// - When `vertices.count == primitive.vertexCount`, replaces GPU vertex/attribute/morph-base
+    ///   buffers without bumping ``VRMModel/topologyRevision`` (only ``VRMModel/geometryRevision``).
+    /// - When `vertices.count != primitive.vertexCount`, validates dependent index and morph
+    ///   buffers, rebuilds morph SoA buffers from retained CPU deltas (throwing ``VRMError/invalidEdit(_:)``
+    ///   if CPU deltas were already dropped), clears stale first-person visibility buffers, and
+    ///   marks topology modified.
     public func updateVertices(
         _ vertices: [VRMVertex],
         meshIndex: Int,
@@ -241,63 +268,112 @@ public final class VRMModelEditor {
             throw VRMError.invalidEdit("primitiveIndex \(primitiveIndex) out of bounds for mesh \(meshIndex) (count: \(mesh.primitives.count))")
         }
         let primitive = mesh.primitives[primitiveIndex]
-
-        if vertices.count == primitive.vertexCount,
-           let vertexBuffer = primitive.vertexBuffer,
-           let attributeBuffer = primitive.attributeBuffer {
-            let posPtr = vertexBuffer.contents().bindMemory(to: VRMPositionVertex.self, capacity: vertices.count)
-            let attrPtr = attributeBuffer.contents().bindMemory(to: VRMAttributeVertex.self, capacity: vertices.count)
-            let basePosPtr = primitive.basePositionsBuffer?.contents().bindMemory(to: SIMD3<Float>.self, capacity: vertices.count)
-            let baseNormPtr = primitive.baseNormalsBuffer?.contents().bindMemory(to: SIMD3<Float>.self, capacity: vertices.count)
-            for i in 0..<vertices.count {
-                let v = vertices[i]
-                posPtr[i] = VRMPositionVertex(position: v.position)
-                attrPtr[i] = VRMAttributeVertex(
-                    normal: v.normal,
-                    texCoord: v.texCoord,
-                    color: v.color,
-                    joints: v.joints,
-                    weights: v.weights
-                )
-                basePosPtr?[i] = v.position
-                baseNormPtr?[i] = v.normal
-            }
-        } else {
-            guard let targetDevice = device ?? model.device else {
-                throw VRMError.invalidEdit("No MTLDevice available to reallocate vertex buffers for primitive (\(meshIndex), \(primitiveIndex))")
-            }
-            primitive.uploadVertices(vertices, device: targetDevice)
-            if primitive.basePositionsBuffer != nil {
-                if vertices.isEmpty {
-                    primitive.basePositionsBuffer = nil
-                    primitive.baseNormalsBuffer = nil
-                } else if let newBasePos = targetDevice.makeBuffer(
-                    length: vertices.count * MemoryLayout<SIMD3<Float>>.stride,
-                    options: .storageModeShared
-                ) {
-                    newBasePos.label = "Morph Base Positions"
-                    let ptr = newBasePos.contents().bindMemory(to: SIMD3<Float>.self, capacity: vertices.count)
-                    for i in 0..<vertices.count { ptr[i] = vertices[i].position }
-                    primitive.basePositionsBuffer = newBasePos
-                }
-            }
-            if primitive.baseNormalsBuffer != nil, !vertices.isEmpty,
-               let newBaseNorm = targetDevice.makeBuffer(
-                   length: vertices.count * MemoryLayout<SIMD3<Float>>.stride,
-                   options: .storageModeShared
-               ) {
-                newBaseNorm.label = "Morph Base Normals"
-                let ptr = newBaseNorm.contents().bindMemory(to: SIMD3<Float>.self, capacity: vertices.count)
-                for i in 0..<vertices.count { ptr[i] = vertices[i].normal }
-                primitive.baseNormalsBuffer = newBaseNorm
-            }
-            topologyDirty = true
+        guard let targetDevice = device ?? model.device ?? primitive.vertexBuffer?.device else {
+            throw VRMError.invalidEdit("No MTLDevice available to allocate vertex buffers for primitive (\(meshIndex), \(primitiveIndex))")
         }
 
-        if let first = vertices.first {
+        let countChanged = vertices.count != primitive.vertexCount
+
+        if countChanged {
+            if primitive.morphTargetCount > 0 && !vertices.isEmpty {
+                let hasRetainedDeltas = primitive.morphTargets.contains { $0.positionDeltas != nil }
+                guard hasRetainedDeltas else {
+                    throw VRMError.invalidEdit(
+                        "Cannot resize vertexCount from \(primitive.vertexCount) to \(vertices.count) on morph-bearing primitive (\(meshIndex), \(primitiveIndex)) after CPU morph deltas were released; load with VRMLoadingOptions(retainCPUMorphDeltas: true) or replace the mesh."
+                    )
+                }
+            }
+            if vertices.count < primitive.vertexCount,
+               let indexBuffer = primitive.indexBuffer,
+               primitive.indexCount > 0 {
+                let maxIdx = Self.maxIndexValue(in: indexBuffer, count: primitive.indexCount, type: primitive.indexType, byteOffset: primitive.indexBufferOffset)
+                if maxIdx >= vertices.count {
+                    throw VRMError.invalidEdit(
+                        "Cannot shrink vertexCount to \(vertices.count) on primitive (\(meshIndex), \(primitiveIndex)) while indexBuffer references vertex index \(maxIdx); upload replacement indices first."
+                    )
+                }
+            }
+        }
+
+        // Sanitize sentinel joint indices and compute required palette size before upload.
+        var sanitizedVertices = vertices
+        var maxJoint: UInt32 = 0
+        var hasJointData = primitive.hasJoints
+        for i in sanitizedVertices.indices {
+            var j = sanitizedVertices[i].joints
+            if j.x >= 65535 { j.x = 0 }
+            if j.y >= 65535 { j.y = 0 }
+            if j.z >= 65535 { j.z = 0 }
+            if j.w >= 65535 { j.w = 0 }
+            sanitizedVertices[i].joints = j
+            if j.x != 0 || j.y != 0 || j.z != 0 || j.w != 0 {
+                hasJointData = true
+            }
+            maxJoint = max(maxJoint, max(max(j.x, j.y), max(j.z, j.w)))
+        }
+
+        primitive.uploadVertices(sanitizedVertices, device: targetDevice)
+        if !sanitizedVertices.isEmpty && (primitive.vertexBuffer == nil || primitive.attributeBuffer == nil) {
+            throw VRMError.invalidEdit("Failed to allocate GPU vertex/attribute buffers for primitive (\(meshIndex), \(primitiveIndex))")
+        }
+
+        primitive.skinningInputSample = nil
+        if hasJointData {
+            primitive.hasJoints = true
+            primitive.requiredPaletteSize = sanitizedVertices.isEmpty ? 0 : Int(maxJoint) + 1
+            if !model.skins.isEmpty {
+                VRMResourceLoader.sanitizeAllMeshJoints(
+                    nodes: model.nodes,
+                    meshes: [mesh],
+                    skins: model.skins
+                )
+            }
+        }
+
+        if countChanged {
+            if primitive.firstPersonHiddenFlags.count != sanitizedVertices.count {
+                primitive.firstPersonHiddenFlags = []
+                primitive.firstPersonHiddenFlagsBuffer = nil
+            }
+            if !primitive.morphTargets.isEmpty {
+                primitive.basePositionsBuffer = nil
+                primitive.baseNormalsBuffer = nil
+                primitive.morphPositionsSoA = nil
+                primitive.morphNormalsSoA = nil
+                primitive.uploadedMorphTargetCount = 0
+                primitive.uploadedMorphVertexCount = 0
+                if !sanitizedVertices.isEmpty {
+                    primitive.createMorphTargetBuffers(device: targetDevice)
+                }
+            }
+            topologyDirty = true
+        } else {
+            if let existingBasePos = primitive.basePositionsBuffer, !sanitizedVertices.isEmpty {
+                let positions = sanitizedVertices.map(\.position)
+                guard let newBasePos = positions.withUnsafeBytes({ bytes in
+                    targetDevice.makeBuffer(bytes: bytes.baseAddress!, length: bytes.count, options: .storageModeShared)
+                }) else {
+                    throw VRMError.invalidEdit("Failed to allocate replacement morph base positions buffer")
+                }
+                newBasePos.label = existingBasePos.label
+                primitive.basePositionsBuffer = newBasePos
+            }
+            if let existingBaseNorm = primitive.baseNormalsBuffer, !sanitizedVertices.isEmpty {
+                let normals = sanitizedVertices.map(\.normal)
+                guard let newBaseNorm = normals.withUnsafeBytes({ bytes in
+                    targetDevice.makeBuffer(bytes: bytes.baseAddress!, length: bytes.count, options: .storageModeShared)
+                }) else {
+                    throw VRMError.invalidEdit("Failed to allocate replacement morph base normals buffer")
+                }
+                newBaseNorm.label = existingBaseNorm.label
+                primitive.baseNormalsBuffer = newBaseNorm
+            }
+        }
+
+        if let first = sanitizedVertices.first {
             var lo = first.position
             var hi = first.position
-            for v in vertices {
+            for v in sanitizedVertices {
                 lo = simd_min(lo, v.position)
                 hi = simd_max(hi, v.position)
             }
@@ -307,12 +383,31 @@ public final class VRMModelEditor {
             primitive.localMin = .zero
             primitive.localMax = .zero
         }
+        geometryDirty = true
         boundsDirty = true
+    }
+
+    private static func maxIndexValue(in buffer: MTLBuffer, count: Int, type: MTLIndexType, byteOffset: Int) -> Int {
+        let basePtr = buffer.contents().advanced(by: byteOffset)
+        var maxVal = 0
+        switch type {
+        case .uint16:
+            let elemCount = min(count, max(0, (buffer.length - byteOffset) / MemoryLayout<UInt16>.stride))
+            let ptr = basePtr.bindMemory(to: UInt16.self, capacity: elemCount)
+            for i in 0..<elemCount { maxVal = max(maxVal, Int(ptr[i])) }
+        case .uint32:
+            let elemCount = min(count, max(0, (buffer.length - byteOffset) / MemoryLayout<UInt32>.stride))
+            let ptr = basePtr.bindMemory(to: UInt32.self, capacity: elemCount)
+            for i in 0..<elemCount { maxVal = max(maxVal, Int(ptr[i])) }
+        @unknown default:
+            break
+        }
+        return maxVal
     }
 
     /// Updates a node's bind pose (`initialTranslation`/`initialRotation`/`initialScale`)
     /// and current local transform, propagating world matrices down its subtree and marking
-    /// skin content modified.
+    /// skin content (and SpringBone rest data, when present) modified.
     public func updateNodeBindPose(
         at index: Int,
         translation: SIMD3<Float>? = nil,
@@ -336,35 +431,71 @@ public final class VRMModelEditor {
         node.updateLocalMatrix()
         node.updateWorldTransform()
         skinContentDirty = true
+        if model.springBone != nil {
+            physicsDirty = true
+        }
     }
 
     /// Replaces a skin's inverse bind matrices in place and marks skin content modified.
-    public func updateSkinInverseBindMatrices(_ matrices: [float4x4], skinIndex: Int) {
-        guard skinIndex >= 0 && skinIndex < model.skins.count else { return }
-        model.skins[skinIndex].inverseBindMatrices = matrices
+    ///
+    /// - Throws: ``VRMError/invalidEdit(_:)`` if `skinIndex` is out of bounds or
+    ///   `matrices.count` does not match the skin's joint count.
+    public func updateSkinInverseBindMatrices(_ matrices: [float4x4], skinIndex: Int) throws {
+        guard skinIndex >= 0 && skinIndex < model.skins.count else {
+            throw VRMError.invalidEdit("skinIndex \(skinIndex) out of bounds (count: \(model.skins.count))")
+        }
+        let skin = model.skins[skinIndex]
+        guard matrices.count == skin.joints.count else {
+            throw VRMError.invalidEdit("Inverse bind matrix count \(matrices.count) does not match joint count \(skin.joints.count) for skin \(skinIndex)")
+        }
+        skin.inverseBindMatrices = matrices
         skinContentDirty = true
     }
 
     /// Replaces the model's SpringBone configuration and re-initializes GPU physics buffers
     /// when a Metal device is available, bumping ``VRMModel/physicsRevision``.
+    ///
+    /// Rolls back to the previous SpringBone state if quota validation or GPU allocation throws.
     public func replaceSpringBone(
         _ springBone: VRMSpringBone?,
         augmentColliders: Bool = true,
         limits: VRMLoaderLimits = .default,
         device: MTLDevice? = nil
     ) throws {
-        model.springBone = springBone
-        if springBone == nil {
-            model.springBoneBuffers = nil
-            model.springBoneGlobalParams = nil
-        } else if let targetDevice = device ?? model.device {
-            try model.initializeSpringBoneGPUSystem(
-                device: targetDevice,
-                augmentColliders: augmentColliders,
-                limits: limits
-            )
+        if let sb = springBone {
+            let totalBones = sb.springs.reduce(0) { $0 + $1.joints.count }
+            if totalBones > limits.maxSpringBones {
+                throw VRMError.limitExceeded(
+                    kind: "springBones",
+                    limit: limits.maxSpringBones,
+                    observed: totalBones
+                )
+            }
         }
-        physicsDirty = true
+
+        let previousSpringBone = model.springBone
+        let previousBuffers = model.springBoneBuffers
+        let previousGlobalParams = model.springBoneGlobalParams
+
+        do {
+            model.springBone = springBone
+            if springBone == nil {
+                model.springBoneBuffers = nil
+                model.springBoneGlobalParams = nil
+            } else if let targetDevice = device ?? model.device {
+                try model.initializeSpringBoneGPUSystem(
+                    device: targetDevice,
+                    augmentColliders: augmentColliders,
+                    limits: limits
+                )
+            }
+            physicsDirty = true
+        } catch {
+            model.springBone = previousSpringBone
+            model.springBoneBuffers = previousBuffers
+            model.springBoneGlobalParams = previousGlobalParams
+            throw error
+        }
     }
 
     // MARK: - Structural Additions
@@ -398,12 +529,33 @@ public final class VRMModelEditor {
 
     /// Appends a node to `model.nodes`, optionally parenting it under `model.nodes[parentIndex]`,
     /// refreshes world transforms and node lookup cache, marks topology modified, and returns its index.
+    ///
+    /// - Throws: ``VRMError/invalidEdit(_:)`` if `node` is already in `model.nodes`, if `parentIndex`
+    ///   is out of bounds (including self-parenting), or if parenting would introduce a cycle.
     @discardableResult
-    public func addNode(_ node: VRMNode, parentIndex: Int? = nil) -> Int {
+    public func addNode(_ node: VRMNode, parentIndex: Int? = nil) throws -> Int {
+        guard !model.nodes.contains(where: { $0 === node }) else {
+            throw VRMError.invalidEdit("Node '\(node.name ?? "#\(node.index)")' is already present in model.nodes")
+        }
         let index = model.nodes.count
+        var resolvedParent: VRMNode? = nil
+        if let parentIndex {
+            guard parentIndex >= 0 && parentIndex < index else {
+                throw VRMError.invalidEdit("parentIndex \(parentIndex) out of bounds for existing nodes (count: \(index))")
+            }
+            let candidate = model.nodes[parentIndex]
+            var ancestor: VRMNode? = candidate
+            while let current = ancestor {
+                if current === node {
+                    throw VRMError.invalidEdit("Parenting node '\(node.name ?? "#\(node.index)")' under parentIndex \(parentIndex) would create a hierarchy cycle")
+                }
+                ancestor = current.parent
+            }
+            resolvedParent = candidate
+        }
+
         model.nodes.append(node)
-        if let parentIndex, parentIndex >= 0 && parentIndex < model.nodes.count {
-            let parent = model.nodes[parentIndex]
+        if let parent = resolvedParent {
             node.parent = parent
             if !parent.children.contains(where: { $0 === node }) {
                 parent.children.append(node)

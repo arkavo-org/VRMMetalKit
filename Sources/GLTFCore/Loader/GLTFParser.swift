@@ -386,9 +386,42 @@ public struct AnyCodable: Codable, @unchecked Sendable {
     /// Decoded JSON value. Concrete types are `Bool`, `Int`, `Double`, `Float`, `String`, `[String: Any]`, `[Any]`, or `NSNull`.
     public let value: Any
 
-    /// Wraps an existing value without decoding.
+    /// Wraps an existing value without decoding, recursively snapshotting mutable Foundation
+    /// containers (`NSDictionary`, `NSArray`, `NSString`) into immutable Swift value types
+    /// so ``AnyCodable`` can safely cross concurrency boundaries.
     public init(_ value: Any) {
-        self.value = value
+        self.value = Self.freeze(value)
+    }
+
+    private static func freeze(_ value: Any) -> Any {
+        switch value {
+        case let dict as [String: Any]:
+            var copy: [String: Any] = [:]
+            copy.reserveCapacity(dict.count)
+            for (k, v) in dict {
+                copy[String(k)] = freeze(v)
+            }
+            return copy
+        case let array as [Any]:
+            return array.map { freeze($0) }
+        case let nsDict as NSDictionary:
+            var copy: [String: Any] = [:]
+            copy.reserveCapacity(nsDict.count)
+            for (k, v) in nsDict {
+                if let key = k as? String {
+                    copy[String(key)] = freeze(v)
+                }
+            }
+            return copy
+        case let nsArray as NSArray:
+            return nsArray.map { freeze($0) }
+        case let str as NSString:
+            return String(str)
+        case let codable as AnyCodable:
+            return codable.value
+        default:
+            return value
+        }
     }
 
     /// Decodes any JSON scalar, array, or object into the underlying ``value``.

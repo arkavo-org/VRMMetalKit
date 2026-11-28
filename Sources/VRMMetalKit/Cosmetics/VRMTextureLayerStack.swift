@@ -255,7 +255,9 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
         var finishRing = TextureRing()
     }
 
+    private let stateLock = NSLock()
     private var bindings: [MaterialBindingKey: MaterialBindingState] = [:]
+    private var bindingGenerations: [MaterialBindingKey: UInt64] = [:]
 
     /// Creates a GPU texture compositor bound to `device`.
     public init(
@@ -486,6 +488,7 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
         baseFinishMetallicFactor: Float?,
         baseFinishRoughnessFactor: Float?,
         bindingKey: MaterialBindingKey?,
+        useDedicatedCanvases: Bool = false,
         commandBuffer: MTLCommandBuffer
     ) throws -> (color: MTLTexture, finish: MTLTexture?) {
         if let baseTexture {
@@ -521,7 +524,13 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
             throw VRMCosmeticError.invalidCanvasSize(width: resolvedWidth, height: resolvedHeight)
         }
 
-        try ensureWorkingCanvases(width: resolvedWidth, height: resolvedHeight)
+        let workingCanvases: (a: MTLTexture, b: MTLTexture)
+        if useDedicatedCanvases {
+            workingCanvases = try makeWorkingCanvases(width: resolvedWidth, height: resolvedHeight)
+        } else {
+            try ensureWorkingCanvases(width: resolvedWidth, height: resolvedHeight)
+            workingCanvases = (canvasA!, canvasB!)
+        }
         let outTexture = try acquireOutputTexture(
             width: resolvedWidth,
             height: resolvedHeight,
@@ -543,8 +552,8 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
         encoder.label = "VRM Cosmetic Composite"
 
         // --- Color pass ---
-        var src = canvasA!
-        var dst = canvasB!
+        var src = workingCanvases.a
+        var dst = workingCanvases.b
 
         var copyParams = CosmeticBaseCopyParamsCPU(
             solidColor: solidBaseColor,
@@ -586,8 +595,8 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
                 height: resolvedHeight,
                 bindingKey: bindingKey
             )
-            src = canvasA!
-            dst = canvasB!
+            src = workingCanvases.a
+            dst = workingCanvases.b
 
             let solidRoughness = max(0, min(1, baseFinishRoughnessFactor ?? 1.0))
             let solidMetallic = max(0, min(1, baseFinishMetallicFactor ?? 0.0))
@@ -712,11 +721,11 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
 
     // MARK: - Material Application, Linked Shade Sync & Clean Restore
 
-    private func captureOrGetBinding(
+    private func captureOrGetBindingLocked(
         for material: VRMMaterial,
         slot: VRMTextureSlot,
         model: VRMModel?
-    ) -> (key: MaterialBindingKey, state: MaterialBindingState) {
+    ) -> (key: MaterialBindingKey, state: MaterialBindingState, generation: UInt64) {
         let key = MaterialBindingKey(materialID: ObjectIdentifier(material), slot: slot)
         let state: MaterialBindingState
         if let existing = bindings[key] {
@@ -756,7 +765,9 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
         if faceLandmarks == nil, let modelLandmarks = model?.faceLandmarks {
             faceLandmarks = modelLandmarks
         }
-        return (key, state)
+        let generation = bindingGenerations[key, default: 0] &+ 1
+        bindingGenerations[key] = generation
+        return (key, state, generation)
     }
 
     private func commitMaterialMutation(
@@ -765,8 +776,24 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
         slot: VRMTextureSlot,
         key: MaterialBindingKey,
         state: MaterialBindingState,
+        expectedGeneration: UInt64,
         model: VRMModel?
     ) {
+        stateLock.lock()
+        guard bindingGenerations[key] == expectedGeneration, bindings[key] != nil else {
+            stateLock.unlock()
+            return
+        }
+        let hadModifiedFinish = bindings[key]?.modifiedFinish == true
+        if slot == .baseColor {
+            if result.finish != nil {
+                bindings[key]?.modifiedFinish = true
+            } else if hadModifiedFinish {
+                bindings[key]?.modifiedFinish = false
+            }
+        }
+        stateLock.unlock()
+
         let applyMutation: () -> Void = {
             switch slot {
             case .baseColor:
@@ -790,13 +817,11 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
                     material.hasCosmeticFinishMap = true
                     material.metallicFactor = 1.0
                     material.roughnessFactor = 1.0
-                    self.bindings[key]?.modifiedFinish = true
-                } else if self.bindings[key]?.modifiedFinish == true {
+                } else if hadModifiedFinish {
                     material.metallicRoughnessTexture = state.originalMetallicRoughnessTexture
                     material.hasCosmeticFinishMap = state.originalHasCosmeticFinishMap
                     material.metallicFactor = state.originalMetallicFactor
                     material.roughnessFactor = state.originalRoughnessFactor
-                    self.bindings[key]?.modifiedFinish = false
                 }
 
             case .emissive:
@@ -843,28 +868,47 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
         preserveAuthoredFinish: Bool = false,
         commandBuffer: MTLCommandBuffer
     ) throws -> (color: MTLTexture, finish: MTLTexture?) {
-        let (key, state) = captureOrGetBinding(for: material, slot: slot, model: model)
+        let isExternalQueue = defaultCommandQueue.map { commandBuffer.commandQueue !== $0 } ?? true
+        stateLock.lock()
+        let (key, state, generation) = captureOrGetBindingLocked(for: material, slot: slot, model: model)
         let seedAuthored = slot == .baseColor && preserveAuthoredFinish
-        let result = try encodeCompositeInternal(
-            baseTexture: state.originalBaseMTLTexture,
-            width: width,
-            height: height,
-            sRGB: true,
-            baseFinishTexture: seedAuthored ? state.originalMetallicRoughnessTexture?.mtlTexture : nil,
-            baseFinishMetallicFactor: seedAuthored ? state.originalMetallicFactor : nil,
-            baseFinishRoughnessFactor: seedAuthored ? state.originalRoughnessFactor : nil,
-            bindingKey: key,
-            commandBuffer: commandBuffer
-        )
+        let result: (color: MTLTexture, finish: MTLTexture?)
+        do {
+            result = try encodeCompositeInternal(
+                baseTexture: state.originalBaseMTLTexture,
+                width: width,
+                height: height,
+                sRGB: true,
+                baseFinishTexture: seedAuthored ? state.originalMetallicRoughnessTexture?.mtlTexture : nil,
+                baseFinishMetallicFactor: seedAuthored ? state.originalMetallicFactor : nil,
+                baseFinishRoughnessFactor: seedAuthored ? state.originalRoughnessFactor : nil,
+                bindingKey: key,
+                useDedicatedCanvases: isExternalQueue,
+                commandBuffer: commandBuffer
+            )
+            stateLock.unlock()
+        } catch {
+            stateLock.unlock()
+            throw error
+        }
         commitMaterialMutation(
             result: result,
             material: material,
             slot: slot,
             key: key,
             state: state,
+            expectedGeneration: generation,
             model: model
         )
         return result
+    }
+
+    private struct AsyncCompositePayload: @unchecked Sendable {
+        let key: MaterialBindingKey
+        let state: MaterialBindingState
+        let generation: UInt64
+        let color: MTLTexture
+        let finish: MTLTexture?
     }
 
     /// Asynchronously composites this layer stack onto `material`'s `slot` without blocking
@@ -879,42 +923,62 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
         preserveAuthoredFinish: Bool = false,
         commandQueue: MTLCommandQueue? = nil
     ) async throws -> (color: MTLTexture, finish: MTLTexture?) {
-        let (key, state) = captureOrGetBinding(for: material, slot: slot, model: model)
         guard let queue = commandQueue ?? defaultCommandQueue,
               let commandBuffer = queue.makeCommandBuffer() else {
             throw VRMCosmeticError.commandEncodingFailed("Failed to create command buffer")
         }
         commandBuffer.label = "VRM Cosmetic Composite Async"
-        let seedAuthored = slot == .baseColor && preserveAuthoredFinish
-        let result = try encodeCompositeInternal(
-            baseTexture: state.originalBaseMTLTexture,
-            width: width,
-            height: height,
-            sRGB: true,
-            baseFinishTexture: seedAuthored ? state.originalMetallicRoughnessTexture?.mtlTexture : nil,
-            baseFinishMetallicFactor: seedAuthored ? state.originalMetallicFactor : nil,
-            baseFinishRoughnessFactor: seedAuthored ? state.originalRoughnessFactor : nil,
-            bindingKey: key,
-            commandBuffer: commandBuffer
-        )
+        let isExternalQueue = defaultCommandQueue.map { queue !== $0 } ?? true
 
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-            commandBuffer.addCompletedHandler { cb in
-                if let error = cb.error {
-                    continuation.resume(throwing: VRMCosmeticError.commandEncodingFailed(error.localizedDescription))
-                } else {
-                    continuation.resume(returning: ())
+        // Lock around encoding AND commandBuffer.commit() so FIFO submission order on defaultCommandQueue
+        // matches canvas/ring acquisition, while never holding the lock across the async await.
+        let payload = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<AsyncCompositePayload, any Error>) in
+            stateLock.lock()
+            do {
+                let captured = captureOrGetBindingLocked(for: material, slot: slot, model: model)
+                let seedAuthored = slot == .baseColor && preserveAuthoredFinish
+                let encoded = try encodeCompositeInternal(
+                    baseTexture: captured.state.originalBaseMTLTexture,
+                    width: width,
+                    height: height,
+                    sRGB: true,
+                    baseFinishTexture: seedAuthored ? captured.state.originalMetallicRoughnessTexture?.mtlTexture : nil,
+                    baseFinishMetallicFactor: seedAuthored ? captured.state.originalMetallicFactor : nil,
+                    baseFinishRoughnessFactor: seedAuthored ? captured.state.originalRoughnessFactor : nil,
+                    bindingKey: captured.key,
+                    useDedicatedCanvases: isExternalQueue,
+                    commandBuffer: commandBuffer
+                )
+                let completedPayload = AsyncCompositePayload(
+                    key: captured.key,
+                    state: captured.state,
+                    generation: captured.generation,
+                    color: encoded.color,
+                    finish: encoded.finish
+                )
+                commandBuffer.addCompletedHandler { cb in
+                    if let error = cb.error {
+                        continuation.resume(throwing: VRMCosmeticError.commandEncodingFailed(error.localizedDescription))
+                    } else {
+                        continuation.resume(returning: completedPayload)
+                    }
                 }
+                commandBuffer.commit()
+                stateLock.unlock()
+            } catch {
+                stateLock.unlock()
+                continuation.resume(throwing: error)
             }
-            commandBuffer.commit()
         }
 
+        let result = (color: payload.color, finish: payload.finish)
         commitMaterialMutation(
             result: result,
             material: material,
             slot: slot,
-            key: key,
-            state: state,
+            key: payload.key,
+            state: payload.state,
+            expectedGeneration: payload.generation,
             model: model
         )
         return result
@@ -941,25 +1005,34 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
         preserveAuthoredFinish: Bool = false,
         commandQueue: MTLCommandQueue? = nil
     ) throws {
-        let (key, state) = captureOrGetBinding(for: material, slot: slot, model: model)
+        stateLock.lock()
+        let (key, state, generation) = captureOrGetBindingLocked(for: material, slot: slot, model: model)
         let seedAuthored = slot == .baseColor && preserveAuthoredFinish
-        let result = try compositeInternal(
-            baseTexture: state.originalBaseMTLTexture,
-            width: width,
-            height: height,
-            sRGB: true,
-            baseFinishTexture: seedAuthored ? state.originalMetallicRoughnessTexture?.mtlTexture : nil,
-            baseFinishMetallicFactor: seedAuthored ? state.originalMetallicFactor : nil,
-            baseFinishRoughnessFactor: seedAuthored ? state.originalRoughnessFactor : nil,
-            bindingKey: key,
-            commandQueue: commandQueue
-        )
+        let result: (color: MTLTexture, finish: MTLTexture?)
+        do {
+            result = try compositeInternal(
+                baseTexture: state.originalBaseMTLTexture,
+                width: width,
+                height: height,
+                sRGB: true,
+                baseFinishTexture: seedAuthored ? state.originalMetallicRoughnessTexture?.mtlTexture : nil,
+                baseFinishMetallicFactor: seedAuthored ? state.originalMetallicFactor : nil,
+                baseFinishRoughnessFactor: seedAuthored ? state.originalRoughnessFactor : nil,
+                bindingKey: key,
+                commandQueue: commandQueue
+            )
+            stateLock.unlock()
+        } catch {
+            stateLock.unlock()
+            throw error
+        }
         commitMaterialMutation(
             result: result,
             material: material,
             slot: slot,
             key: key,
             state: state,
+            expectedGeneration: generation,
             model: model
         )
     }
@@ -972,7 +1045,11 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
         in model: VRMModel? = nil
     ) {
         let key = MaterialBindingKey(materialID: ObjectIdentifier(material), slot: slot)
-        guard let state = bindings.removeValue(forKey: key) else { return }
+        stateLock.lock()
+        bindingGenerations[key, default: 0] &+= 1
+        let state = bindings.removeValue(forKey: key)
+        stateLock.unlock()
+        guard let state else { return }
 
         let restoreMutation: () -> Void = {
             switch slot {
@@ -1044,10 +1121,7 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
         )
     }
 
-    private func ensureWorkingCanvases(width: Int, height: Int) throws {
-        if canvasA != nil, canvasB != nil, canvasSize == (width, height) {
-            return
-        }
+    private func makeWorkingCanvases(width: Int, height: Int) throws -> (a: MTLTexture, b: MTLTexture) {
         let desc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba16Float,
             width: width,
@@ -1063,8 +1137,16 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
         }
         a.label = "Cosmetic Canvas A (\(width)x\(height))"
         b.label = "Cosmetic Canvas B (\(width)x\(height))"
-        canvasA = a
-        canvasB = b
+        return (a, b)
+    }
+
+    private func ensureWorkingCanvases(width: Int, height: Int) throws {
+        if canvasA != nil, canvasB != nil, canvasSize == (width, height) {
+            return
+        }
+        let created = try makeWorkingCanvases(width: width, height: height)
+        canvasA = created.a
+        canvasB = created.b
         canvasSize = (width, height)
     }
 

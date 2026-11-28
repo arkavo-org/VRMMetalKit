@@ -77,6 +77,8 @@ public final class VRMModel: VRMSceneContent, @unchecked Sendable {
     public private(set) var skinContentRevision: UInt64 = 0
     /// Bumped whenever SpringBone chains or colliders change.
     public private(set) var physicsRevision: UInt64 = 0
+    /// Bumped whenever vertex positions or vertex attributes change on an existing primitive.
+    public private(set) var geometryRevision: UInt64 = 0
 
     internal func bumpTopologyRevisionLocked() { topologyRevision &+= 1 }
     internal func bumpMaterialRevisionLocked() { materialRevision &+= 1 }
@@ -103,7 +105,10 @@ public final class VRMModel: VRMSceneContent, @unchecked Sendable {
                 physicsRevision &+= 1
                 springBoneRevision &+= 1
             }
-            let shouldRecomputeBounds = editor.topologyDirty || editor.boundsDirty
+            if editor.geometryDirty {
+                geometryRevision &+= 1
+            }
+            let shouldRecomputeBounds = editor.topologyDirty || editor.boundsDirty || editor.geometryDirty
             lock.unlock()
             if shouldRecomputeBounds {
                 finalizeModelLocalBounds()
@@ -455,17 +460,17 @@ public final class VRMModel: VRMSceneContent, @unchecked Sendable {
             skins: model.skins
         )
 
-        var bufferBytes = 0
+        var byteLengths: [Int] = []
         for mesh in model.meshes {
             for primitive in mesh.primitives {
-                bufferBytes += primitive.vertexBuffer?.length ?? 0
-                bufferBytes += primitive.attributeBuffer?.length ?? 0
-                bufferBytes += primitive.indexBuffer?.length ?? 0
-                bufferBytes += primitive.morphPositionsSoA?.length ?? 0
-                bufferBytes += primitive.morphNormalsSoA?.length ?? 0
+                if let l = primitive.vertexBuffer?.length { byteLengths.append(l) }
+                if let l = primitive.attributeBuffer?.length { byteLengths.append(l) }
+                if let l = primitive.indexBuffer?.length { byteLengths.append(l) }
+                if let l = primitive.morphPositionsSoA?.length { byteLengths.append(l) }
+                if let l = primitive.morphNormalsSoA?.length { byteLengths.append(l) }
             }
         }
-        model.estimatedHostBufferBytes = bufferBytes
+        model.estimatedHostBufferBytes = try checkedSumBufferBytes(byteLengths, limit: limits.maxTotalBufferBytes)
 
         if model.springBone != nil {
             model.expandVRM0SpringBoneChains()
@@ -986,7 +991,14 @@ public final class VRMModel: VRMSceneContent, @unchecked Sendable {
         model.baseURL = baseURL
         model.device = device
         model.faceLandmarks = VRMFaceLandmarks.parse(from: document)
-        model.estimatedHostBufferBytes = document.buffers?.reduce(0) { $0 + max(0, $1.byteLength) } ?? 0
+        if let gltfBuffers = document.buffers {
+            model.estimatedHostBufferBytes = try checkedSumBufferBytes(
+                gltfBuffers.map { max(0, $0.byteLength) },
+                limit: limits.maxTotalBufferBytes
+            )
+        } else {
+            model.estimatedHostBufferBytes = 0
+        }
         
         await context?.updatePhase(.parsingVRMExtension, progress: 1.0)
         
@@ -1058,6 +1070,19 @@ public final class VRMModel: VRMSceneContent, @unchecked Sendable {
         outlineWidthMaskTextureIndices = loaded.outlineWidthMaskTextureIndices
         uvAnimationMaskTextureIndices = loaded.uvAnimationMaskTextureIndices
         buildNodeLookupTable()
+    }
+
+    /// Overflow-safe byte-length sum used for loader and cosmetic attachment quota enforcement.
+    internal static func checkedSumBufferBytes(_ lengths: [Int], limit: Int) throws -> Int {
+        var total = 0
+        for length in lengths where length > 0 {
+            let (next, overflow) = total.addingReportingOverflow(length)
+            if overflow {
+                throw VRMError.limitExceeded(kind: "totalBufferBytes", limit: limit, observed: Int.max)
+            }
+            total = next
+        }
+        return total
     }
 
     internal func buildNodeLookupTable() {
