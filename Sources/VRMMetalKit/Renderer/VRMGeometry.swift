@@ -2219,7 +2219,7 @@ public final class VRMMaterial: @unchecked Sendable {
                 default:
                     alphaMode = .opaque
                 }
-            } else if alphaMode == .blend, (explicitZWrite ?? true) {
+            } else if alphaMode == .blend, explicitZWrite == true {
                 transparentWithZWrite = true
             }
         } else {

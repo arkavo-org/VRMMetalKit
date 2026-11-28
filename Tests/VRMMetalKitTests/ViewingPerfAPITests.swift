@@ -291,6 +291,23 @@ final class ViewingPerfAPITests: XCTestCase {
         let mat = VRMMaterial(from: gltfMat, textures: [], vrm0MaterialProperty: prop, vrmVersion: .v0_0)
         XCTAssertEqual(mat.alphaMode, .blend)
         XCTAssertTrue(mat.transparentWithZWrite)
+
+        // Stock VRM/UnlitTransparent without _BlendMode or _ZWrite must NOT enable depth writes
+        var unlitTransparent = VRM0MaterialProperty()
+        unlitTransparent.name = "UnlitT"
+        unlitTransparent.shader = "VRM/UnlitTransparent"
+        let matNoZWrite = VRMMaterial(from: gltfMat, textures: [], vrm0MaterialProperty: unlitTransparent, vrmVersion: .v0_0)
+        XCTAssertEqual(matNoZWrite.alphaMode, .blend)
+        XCTAssertFalse(matNoZWrite.transparentWithZWrite)
+
+        // Explicit _ZWrite = 1.0 without _BlendMode still enables depth writes
+        var explicitZWriteProp = VRM0MaterialProperty()
+        explicitZWriteProp.name = "ExplicitZW"
+        explicitZWriteProp.shader = "VRM_USE_GLTFSHADER"
+        explicitZWriteProp.floatProperties["_ZWrite"] = 1.0
+        let matExplicitZWrite = VRMMaterial(from: gltfMat, textures: [], vrm0MaterialProperty: explicitZWriteProp, vrmVersion: .v0_0)
+        XCTAssertEqual(matExplicitZWrite.alphaMode, .blend)
+        XCTAssertTrue(matExplicitZWrite.transparentWithZWrite)
     }
 }
 
