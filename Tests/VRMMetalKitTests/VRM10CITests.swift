@@ -37,7 +37,11 @@ final class VRM10CITests: XCTestCase {
 
         glbData = try originalModel.serialize()
 
-        reloadedModel = try await VRMModel.load(from: glbData, device: nil)
+        reloadedModel = try await VRMModel.load(
+            from: glbData,
+            device: nil,
+            options: VRMLoadingOptions(retainGLTFDocument: true)
+        )
     }
 
     // MARK: - Tests
@@ -165,7 +169,7 @@ final class VRM10CITests: XCTestCase {
                 "Mesh '\(mesh.name ?? "unnamed")' should have primitives")
         }
 
-        let gltfMeshes = reloadedModel.gltf.meshes
+        let gltfMeshes = reloadedModel.gltf?.meshes
         XCTAssertNotNil(gltfMeshes)
         XCTAssertFalse(gltfMeshes!.isEmpty)
     }

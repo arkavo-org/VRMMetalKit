@@ -151,8 +151,9 @@ final class NonSkinnedMeshDropTests: XCTestCase {
         // (VRMSkin falls back to identity matrices when index is nil).
         let skinJSON = #"{"joints":[1]}"#
         let gltfSkin = try JSONDecoder().decode(GLTFSkin.self, from: skinJSON.data(using: .utf8)!)
-        let bufferLoader = BufferLoader(document: model.gltf, binaryData: nil, baseURL: nil, preloadedData: nil)
-        let skin = try VRMSkin(from: gltfSkin, nodes: nodes, document: model.gltf, bufferLoader: bufferLoader)
+        let gltf = try XCTUnwrap(model.gltf)
+        let bufferLoader = BufferLoader(document: gltf, binaryData: nil, baseURL: nil, preloadedData: nil)
+        let skin = try VRMSkin(from: gltfSkin, nodes: nodes, document: gltf, bufferLoader: bufferLoader)
         model.skins = [skin]
 
         return model

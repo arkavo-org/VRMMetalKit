@@ -196,8 +196,8 @@ final class VRMCreatorSimpleTests: XCTestCase {
 
         // VRMBuilder creates glTF materials but VRMModel loads them asynchronously
         // The materials count will be 0 until resources are loaded
-        XCTAssertGreaterThanOrEqual(vrm.gltf.materials?.count ?? 0, 1)
-        XCTAssertNotNil(vrm.gltf.materials)
+        XCTAssertGreaterThanOrEqual(vrm.gltf?.materials?.count ?? 0, 1)
+        XCTAssertNotNil(vrm.gltf?.materials)
     }
 
     func testExpressionPresets() throws {
@@ -335,6 +335,6 @@ final class VRMCreatorSimpleTests: XCTestCase {
         XCTAssertNotNil(vrm.humanoid)
         // Expressions are only added if non-empty
         // XCTAssertNotNil(vrm.expressions)
-        XCTAssertGreaterThanOrEqual(vrm.gltf.materials?.count ?? 0, 1)
+        XCTAssertGreaterThanOrEqual(vrm.gltf?.materials?.count ?? 0, 1)
     }
 }

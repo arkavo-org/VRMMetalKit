@@ -45,6 +45,9 @@ public enum VRMError: Error {
 
     /// Combined host and cosmetic SpringBone authored collider groups exceed the 32-bit mask budget.
     case colliderGroupLimitExceeded(limit: Int, observed: Int)
+
+    /// A live mutation performed through ``VRMModelEditor`` received invalid indices, counts, or device state.
+    case invalidEdit(String)
 }
 
 extension VRMError: LocalizedError {
@@ -144,6 +147,17 @@ extension VRMError: LocalizedError {
             Suggestion: Merge redundant collider groups in the cosmetic asset or detach unused physics accessories before attaching new ones.
 
             VRM Spec: https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_springBone-1.0/README.md
+            """
+
+        case .invalidEdit(let reason):
+            return """
+            ❌ Invalid Live Model Edit
+
+            Reason: \(reason)
+
+            Suggestion: Verify mesh/primitive/node/skin indices, vertex count parity, and Metal device availability before mutating a VRMModel via `edit(_:)`.
+
+            VRM Spec: https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/README.md
             """
         }
     }

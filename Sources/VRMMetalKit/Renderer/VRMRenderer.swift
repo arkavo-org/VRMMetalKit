@@ -1071,6 +1071,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     private var morphedBuffers: [MorphKey: MTLBuffer] = [:]
     /// Expression-weight fingerprint that produced ``morphedBuffers``.
     private var lastMorphWeightsFingerprint: UInt64?
+    /// Model `geometryRevision` that produced ``morphedBuffers``.
+    private var lastMorphGeometryRevision: UInt64 = 0
 
     /// Spec-driven render bucket for v2.0 rendering (`RendererConfig.legacyMaterialHeuristics == false`).
     ///
@@ -1526,10 +1528,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         if let controller = expressionController {
             let fingerprint = controller.morphWeightsFingerprint()
             currentFingerprint = fingerprint
-            if MorphComputeGate.shouldReusePreviousOutput(
-                currentFingerprint: fingerprint,
-                previousFingerprint: lastMorphWeightsFingerprint
-            ) {
+            if lastMorphGeometryRevision == model.geometryRevision,
+               MorphComputeGate.shouldReusePreviousOutput(
+                   currentFingerprint: fingerprint,
+                   previousFingerprint: lastMorphWeightsFingerprint
+               ) {
                 return morphedBuffers
             }
         }
@@ -1584,6 +1587,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             morphedBuffers.removeAll(keepingCapacity: true)
             if let fingerprint = currentFingerprint {
                 lastMorphWeightsFingerprint = fingerprint
+                lastMorphGeometryRevision = model.geometryRevision
             }
             return [:]
         }
@@ -1824,6 +1828,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // frame re-dispatches instead of reusing an incomplete dict via the gate.
         if let fingerprint = currentFingerprint {
             lastMorphWeightsFingerprint = hadPartialFailure ? nil : fingerprint
+            lastMorphGeometryRevision = model.geometryRevision
         }
 
         // Return morphed buffers to be used in render pass

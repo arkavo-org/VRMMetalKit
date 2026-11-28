@@ -348,6 +348,12 @@ public struct VRMLoadingOptions: Sendable {
     /// CPU-only loads (`device == nil`) always retain CPU deltas regardless of this flag.
     public let retainCPUMorphDeltas: Bool
 
+    /// When `false` (the default), the parsed ``GLTFDocument`` AST (`VRMModel.gltf`) is
+    /// released after resource loading finishes to reclaim memory during viewing.
+    ///
+    /// Set to `true` when downstream code needs to inspect the raw parsed glTF document.
+    public let retainGLTFDocument: Bool
+
     /// Creates loading options.
     ///
     /// - Parameters:
@@ -361,6 +367,7 @@ public struct VRMLoadingOptions: Sendable {
     ///   - limits: Configurable memory and structural quotas enforced during load (default: `.default`).
     ///   - preloadedTextures: Optional in-memory texture overrides keyed by glTF texture index (default: empty).
     ///   - retainCPUMorphDeltas: Keep CPU morph-delta arrays after GPU SoA upload (default: false).
+    ///   - retainGLTFDocument: Keep the parsed `GLTFDocument` AST on `VRMModel.gltf` after load (default: false).
     public init(
         progressCallback: (@Sendable (VRMLoadingProgress) -> Void)? = nil,
         progressUpdateInterval: TimeInterval = 0.1,
@@ -369,7 +376,8 @@ public struct VRMLoadingOptions: Sendable {
         augmentSpringBoneColliders: Bool = true,
         limits: VRMLoaderLimits = .default,
         preloadedTextures: [Int: VRMPreloadedTexture] = [:],
-        retainCPUMorphDeltas: Bool = false
+        retainCPUMorphDeltas: Bool = false,
+        retainGLTFDocument: Bool = false
     ) {
         self.progressCallback = progressCallback
         self.progressUpdateInterval = progressUpdateInterval
@@ -379,6 +387,7 @@ public struct VRMLoadingOptions: Sendable {
         self.limits = limits
         self.preloadedTextures = preloadedTextures
         self.retainCPUMorphDeltas = retainCPUMorphDeltas
+        self.retainGLTFDocument = retainGLTFDocument
     }
     
     /// Default options: no progress callback, cancellation enabled, ``VRMLoadingOptimization/default`` optimizations.

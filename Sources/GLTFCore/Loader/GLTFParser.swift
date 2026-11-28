@@ -82,6 +82,49 @@ public struct GLTFDocument: Codable, @unchecked Sendable {
         case extensionsUsed, extensionsRequired
     }
 
+    /// Creates a glTF document programmatically without JSON round-tripping.
+    public init(
+        asset: GLTFAsset,
+        scene: Int? = nil,
+        scenes: [GLTFScene]? = nil,
+        nodes: [GLTFNode]? = nil,
+        meshes: [GLTFMesh]? = nil,
+        materials: [GLTFMaterial]? = nil,
+        textures: [GLTFTexture]? = nil,
+        images: [GLTFImage]? = nil,
+        samplers: [GLTFSampler]? = nil,
+        buffers: [GLTFBuffer]? = nil,
+        bufferViews: [GLTFBufferView]? = nil,
+        accessors: [GLTFAccessor]? = nil,
+        skins: [GLTFSkin]? = nil,
+        animations: [GLTFAnimation]? = nil,
+        extensions: [String: Any]? = nil,
+        extras: [String: Any]? = nil,
+        extensionsUsed: [String]? = nil,
+        extensionsRequired: [String]? = nil,
+        binaryBufferData: Data? = nil
+    ) {
+        self.asset = asset
+        self.scene = scene
+        self.scenes = scenes
+        self.nodes = nodes
+        self.meshes = meshes
+        self.materials = materials
+        self.textures = textures
+        self.images = images
+        self.samplers = samplers
+        self.buffers = buffers
+        self.bufferViews = bufferViews
+        self.accessors = accessors
+        self.skins = skins
+        self.animations = animations
+        self.extensions = extensions
+        self.extras = extras
+        self.extensionsUsed = extensionsUsed
+        self.extensionsRequired = extensionsRequired
+        self.binaryBufferData = binaryBufferData
+    }
+
     /// Decodes a glTF document from JSON, treating `extensions` as a heterogeneous dictionary.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -120,7 +163,7 @@ public struct GLTFDocument: Codable, @unchecked Sendable {
         }
     }
 
-    /// Encodes the document to JSON. The `extensions` dictionary is currently elided on encode.
+    /// Encodes the document to JSON, including `extensions` and `extras`.
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(asset, forKey: .asset)
@@ -137,6 +180,12 @@ public struct GLTFDocument: Codable, @unchecked Sendable {
         try container.encodeIfPresent(accessors, forKey: .accessors)
         try container.encodeIfPresent(skins, forKey: .skins)
         try container.encodeIfPresent(animations, forKey: .animations)
+        if let extensions {
+            try container.encode(extensions.mapValues { AnyCodable($0) }, forKey: .extensions)
+        }
+        if let extras {
+            try container.encode(extras.mapValues { AnyCodable($0) }, forKey: .extras)
+        }
         try container.encodeIfPresent(extensionsUsed, forKey: .extensionsUsed)
         try container.encodeIfPresent(extensionsRequired, forKey: .extensionsRequired)
     }
@@ -145,7 +194,7 @@ public struct GLTFDocument: Codable, @unchecked Sendable {
 // MARK: - GLTF Components
 
 /// A glTF 2.0 [asset](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#asset) header.
-public struct GLTFAsset: Codable {
+public struct GLTFAsset: Codable, Sendable {
     /// glTF version string (must be `"2.0"` for files this package loads).
     public let version: String
     /// Free-form exporter identifier (e.g. `"VRoid Studio v1.x"`).
@@ -154,14 +203,31 @@ public struct GLTFAsset: Codable {
     public let copyright: String?
     /// Minimum glTF version a consumer must support to load this file.
     public let minVersion: String?
+
+    public init(
+        version: String = "2.0",
+        generator: String? = nil,
+        copyright: String? = nil,
+        minVersion: String? = nil
+    ) {
+        self.version = version
+        self.generator = generator
+        self.copyright = copyright
+        self.minVersion = minVersion
+    }
 }
 
 /// A glTF 2.0 [scene](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#scenes): an ordered list of root node indices.
-public struct GLTFScene: Codable {
+public struct GLTFScene: Codable, Sendable {
     /// Optional scene name.
     public let name: String?
     /// Root nodes for this scene (indices into ``GLTFDocument/nodes``).
     public let nodes: [Int]?
+
+    public init(name: String? = nil, nodes: [Int]? = nil) {
+        self.name = name
+        self.nodes = nodes
+    }
 }
 
 /// A glTF 2.0 [node](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#nodes): a transform plus optional mesh, skin, and children.
@@ -169,7 +235,7 @@ public struct GLTFScene: Codable {
 /// Transform is given as either a single 16-float `matrix`, or a TRS triple
 /// (`translation`, `rotation`, `scale`). VRM models always use TRS so that
 /// animation can mutate components independently.
-public struct GLTFNode: Codable {
+public struct GLTFNode: Codable, @unchecked Sendable {
     /// Optional node name. VRM relies on these for humanoid bone matching when no `VRMC_vrm.humanoid` entry maps the bone explicitly.
     public let name: String?
     /// Indices of child nodes.
@@ -217,7 +283,7 @@ public struct GLTFNode: Codable {
 }
 
 /// A glTF 2.0 [mesh](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#meshes): a bag of one or more renderable primitives.
-public struct GLTFMesh: Codable {
+public struct GLTFMesh: Codable, Sendable {
     /// Optional mesh name.
     public let name: String?
     /// Renderable primitives; each becomes one VRMMetalKit ``VRMPrimitive``.
@@ -226,16 +292,32 @@ public struct GLTFMesh: Codable {
     public let weights: [Float]?
     /// Vendor-specific extras, used here to surface morph-target names.
     public let extras: GLTFMeshExtras?
+
+    public init(
+        name: String? = nil,
+        primitives: [GLTFPrimitive],
+        weights: [Float]? = nil,
+        extras: GLTFMeshExtras? = nil
+    ) {
+        self.name = name
+        self.primitives = primitives
+        self.weights = weights
+        self.extras = extras
+    }
 }
 
 /// Mesh `extras` block carrying morph-target names exported by VRoid and similar tools.
-public struct GLTFMeshExtras: Codable {
+public struct GLTFMeshExtras: Codable, Sendable {
     /// Display names for each morph target, in target-array order.
     public let targetNames: [String]?
+
+    public init(targetNames: [String]? = nil) {
+        self.targetNames = targetNames
+    }
 }
 
 /// A glTF 2.0 [mesh primitive](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#meshes-overview). See the spec for attribute and index semantics.
-public struct GLTFPrimitive: Codable {
+public struct GLTFPrimitive: Codable, @unchecked Sendable {
     /// Vertex attribute accessors keyed by semantic (`"POSITION"`, `"NORMAL"`, `"TEXCOORD_0"`, `"JOINTS_0"`, `"WEIGHTS_0"`, …).
     public let attributes: [String: Int]
     /// Optional index accessor. When `nil`, vertices are drawn in attribute order.
@@ -246,10 +328,24 @@ public struct GLTFPrimitive: Codable {
     public let mode: Int?
     /// Morph target deltas, parallel to the parent mesh's target weights.
     public let targets: [GLTFMorphTarget]?
+
+    public init(
+        attributes: [String: Int],
+        indices: Int? = nil,
+        material: Int? = nil,
+        mode: Int? = nil,
+        targets: [GLTFMorphTarget]? = nil
+    ) {
+        self.attributes = attributes
+        self.indices = indices
+        self.material = material
+        self.mode = mode
+        self.targets = targets
+    }
 }
 
 /// A glTF 2.0 [morph target](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#morph-targets) referencing delta accessors.
-public struct GLTFMorphTarget: Codable {
+public struct GLTFMorphTarget: Codable, @unchecked Sendable {
     /// Accessor of `POSITION` deltas.
     public let position: Int?
     /// Accessor of `NORMAL` deltas.
@@ -258,6 +354,18 @@ public struct GLTFMorphTarget: Codable {
     public let tangent: Int?
     /// Per-target extras (e.g. names attached by some exporters).
     public let extra: [String: AnyCodable]?
+
+    public init(
+        position: Int? = nil,
+        normal: Int? = nil,
+        tangent: Int? = nil,
+        extra: [String: AnyCodable]? = nil
+    ) {
+        self.position = position
+        self.normal = normal
+        self.tangent = tangent
+        self.extra = extra
+    }
 
     enum CodingKeys: String, CodingKey {
         case position = "POSITION"
@@ -274,13 +382,46 @@ public struct GLTFMorphTarget: Codable {
 /// Decoding checks for `null` first, then tries `Bool`, `Int`, `Double`,
 /// `Float`, `String`, dictionary, and array; JSON `null` and unrecognised
 /// types both decode as `NSNull`.
-public struct AnyCodable: Codable {
+public struct AnyCodable: Codable, @unchecked Sendable {
     /// Decoded JSON value. Concrete types are `Bool`, `Int`, `Double`, `Float`, `String`, `[String: Any]`, `[Any]`, or `NSNull`.
     public let value: Any
 
-    /// Wraps an existing value without decoding.
+    /// Wraps an existing value without decoding, recursively snapshotting mutable Foundation
+    /// containers (`NSDictionary`, `NSArray`, `NSString`) into immutable Swift value types
+    /// so ``AnyCodable`` can safely cross concurrency boundaries.
     public init(_ value: Any) {
-        self.value = value
+        self.value = Self.freeze(value)
+    }
+
+    private static func freeze(_ value: Any) -> Any {
+        switch value {
+        case let dict as [String: Any]:
+            var copy: [String: Any] = [:]
+            copy.reserveCapacity(dict.count)
+            for (k, v) in dict {
+                copy[String(k)] = freeze(v)
+            }
+            return copy
+        case let array as [Any]:
+            return array.map { freeze($0) }
+        case let nsDict as NSDictionary:
+            var copy: [String: Any] = [:]
+            copy.reserveCapacity(nsDict.count)
+            for (k, v) in nsDict {
+                if let key = k as? String {
+                    copy[String(key)] = freeze(v)
+                }
+            }
+            return copy
+        case let nsArray as NSArray:
+            return nsArray.map { freeze($0) }
+        case let str as NSString:
+            return String(str)
+        case let codable as AnyCodable:
+            return codable.value
+        default:
+            return value
+        }
     }
 
     /// Decodes any JSON scalar, array, or object into the underlying ``value``.
@@ -344,7 +485,7 @@ public struct AnyCodable: Codable {
 ///
 /// `extensions` preserves `VRMC_materials_mtoon` and `KHR_materials_unlit`
 /// payloads so ``VRMMToonMaterial`` and ``VRMMaterial`` can interpret them.
-public struct GLTFMaterial: Codable {
+public struct GLTFMaterial: Codable, @unchecked Sendable {
     /// Material name (matched against VRM 0.x material property entries).
     public let name: String?
     /// PBR base-color and metallic-roughness inputs.
@@ -372,6 +513,30 @@ public struct GLTFMaterial: Codable {
         case alphaMode, alphaCutoff, doubleSided, extensions
     }
 
+    public init(
+        name: String? = nil,
+        pbrMetallicRoughness: GLTFPBRMetallicRoughness? = nil,
+        normalTexture: GLTFNormalTextureInfo? = nil,
+        occlusionTexture: GLTFOcclusionTextureInfo? = nil,
+        emissiveTexture: GLTFTextureInfo? = nil,
+        emissiveFactor: [Float]? = nil,
+        alphaMode: String? = nil,
+        alphaCutoff: Float? = nil,
+        doubleSided: Bool? = nil,
+        extensions: [String: Any]? = nil
+    ) {
+        self.name = name
+        self.pbrMetallicRoughness = pbrMetallicRoughness
+        self.normalTexture = normalTexture
+        self.occlusionTexture = occlusionTexture
+        self.emissiveTexture = emissiveTexture
+        self.emissiveFactor = emissiveFactor
+        self.alphaMode = alphaMode
+        self.alphaCutoff = alphaCutoff
+        self.doubleSided = doubleSided
+        self.extensions = extensions
+    }
+
     /// Decodes the material, preserving the raw `extensions` dictionary for VRM MToon parsing.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -384,8 +549,6 @@ public struct GLTFMaterial: Codable {
         alphaMode = try container.decodeIfPresent(String.self, forKey: .alphaMode)
         alphaCutoff = try container.decodeIfPresent(Float.self, forKey: .alphaCutoff)
         doubleSided = try container.decodeIfPresent(Bool.self, forKey: .doubleSided)
-        // Decode extensions as [String: Any] using AnyCodable wrapper
-        // This enables VRM 1.0 per-material VRMC_materials_mtoon extension parsing
         if container.contains(.extensions) {
             if let extWrapper = try? container.decode([String: AnyCodable].self, forKey: .extensions) {
                 extensions = extWrapper.mapValues { $0.value }
@@ -397,7 +560,7 @@ public struct GLTFMaterial: Codable {
         }
     }
 
-    /// Encodes the material's standard fields. Extensions are not re-emitted.
+    /// Encodes the material's standard fields and `extensions`.
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encodeIfPresent(name, forKey: .name)
@@ -409,11 +572,14 @@ public struct GLTFMaterial: Codable {
         try container.encodeIfPresent(alphaMode, forKey: .alphaMode)
         try container.encodeIfPresent(alphaCutoff, forKey: .alphaCutoff)
         try container.encodeIfPresent(doubleSided, forKey: .doubleSided)
+        if let extensions {
+            try container.encode(extensions.mapValues { AnyCodable($0) }, forKey: .extensions)
+        }
     }
 }
 
 /// PBR metallic-roughness material inputs per the glTF 2.0 [Materials](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#reference-pbrmetallicroughness) reference.
-public struct GLTFPBRMetallicRoughness: Codable {
+public struct GLTFPBRMetallicRoughness: Codable, Sendable {
     /// Linear RGBA base-color multiplier.
     public let baseColorFactor: [Float]?
     /// Base color (albedo) texture.
@@ -424,10 +590,24 @@ public struct GLTFPBRMetallicRoughness: Codable {
     public let roughnessFactor: Float?
     /// Combined metallic (B) + roughness (G) texture.
     public let metallicRoughnessTexture: GLTFTextureInfo?
+
+    public init(
+        baseColorFactor: [Float]? = nil,
+        baseColorTexture: GLTFTextureInfo? = nil,
+        metallicFactor: Float? = nil,
+        roughnessFactor: Float? = nil,
+        metallicRoughnessTexture: GLTFTextureInfo? = nil
+    ) {
+        self.baseColorFactor = baseColorFactor
+        self.baseColorTexture = baseColorTexture
+        self.metallicFactor = metallicFactor
+        self.roughnessFactor = roughnessFactor
+        self.metallicRoughnessTexture = metallicRoughnessTexture
+    }
 }
 
 /// Parsed [`KHR_texture_transform`](https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_texture_transform/README.md) payload: UV offset, rotation, and scale.
-public struct GLTFKHRTextureTransform {
+public struct GLTFKHRTextureTransform: Sendable, Equatable {
     /// UV offset in texture space.
     public var offset: SIMD2<Float>
     /// UV rotation in radians, counter-clockwise around the origin.
@@ -440,6 +620,17 @@ public struct GLTFKHRTextureTransform {
         self.offset = offset
         self.rotation = rotation
         self.scale = scale
+    }
+
+    /// Serializes this transform as a `KHR_texture_transform` extension dictionary.
+    internal func toExtensionDictionary() -> [String: AnyCodable] {
+        [
+            "KHR_texture_transform": AnyCodable([
+                "offset": [offset.x, offset.y] as [Any],
+                "rotation": rotation,
+                "scale": [scale.x, scale.y] as [Any]
+            ] as [String: Any])
+        ]
     }
 
     /// Parses a `KHR_texture_transform` JSON object, using identity defaults for omitted fields.
@@ -477,7 +668,7 @@ public struct GLTFKHRTextureTransform {
 }
 
 /// A texture reference on a material slot. See the [glTF 2.0 textureInfo schema](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#reference-textureinfo).
-public struct GLTFTextureInfo: Codable {
+public struct GLTFTextureInfo: Codable, Sendable {
     /// Index into ``GLTFDocument/textures``.
     public let index: Int
     /// UV channel index (`TEXCOORD_<n>`). Defaults to 0.
@@ -489,6 +680,12 @@ public struct GLTFTextureInfo: Codable {
         case index, texCoord, extensions
     }
 
+    public init(index: Int, texCoord: Int? = nil, khrTextureTransform: GLTFKHRTextureTransform? = nil) {
+        self.index = index
+        self.texCoord = texCoord
+        self.khrTextureTransform = khrTextureTransform
+    }
+
     /// Decodes the texture reference and, if present, the `KHR_texture_transform` extension.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -497,16 +694,19 @@ public struct GLTFTextureInfo: Codable {
         khrTextureTransform = GLTFKHRTextureTransform.decodeExtension(from: container, key: .extensions)
     }
 
-    /// Encodes the texture reference. The `KHR_texture_transform` payload is not re-emitted.
+    /// Encodes the texture reference and any `KHR_texture_transform` extension.
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(index, forKey: .index)
         try container.encodeIfPresent(texCoord, forKey: .texCoord)
+        if let transform = khrTextureTransform {
+            try container.encode(transform.toExtensionDictionary(), forKey: .extensions)
+        }
     }
 }
 
 /// Normal map texture reference with the per-spec `scale` parameter.
-public struct GLTFNormalTextureInfo: Codable {
+public struct GLTFNormalTextureInfo: Codable, Sendable {
     /// Index into ``GLTFDocument/textures``.
     public let index: Int
     /// UV channel index. Defaults to 0.
@@ -520,6 +720,18 @@ public struct GLTFNormalTextureInfo: Codable {
         case index, texCoord, scale, extensions
     }
 
+    public init(
+        index: Int,
+        texCoord: Int? = nil,
+        scale: Float? = nil,
+        khrTextureTransform: GLTFKHRTextureTransform? = nil
+    ) {
+        self.index = index
+        self.texCoord = texCoord
+        self.scale = scale
+        self.khrTextureTransform = khrTextureTransform
+    }
+
     /// Decodes the texture reference and, if present, the `KHR_texture_transform` extension.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -529,17 +741,20 @@ public struct GLTFNormalTextureInfo: Codable {
         khrTextureTransform = GLTFKHRTextureTransform.decodeExtension(from: container, key: .extensions)
     }
 
-    /// Encodes the texture reference. The `KHR_texture_transform` payload is not re-emitted.
+    /// Encodes the texture reference and any `KHR_texture_transform` extension.
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(index, forKey: .index)
         try container.encodeIfPresent(texCoord, forKey: .texCoord)
         try container.encodeIfPresent(scale, forKey: .scale)
+        if let transform = khrTextureTransform {
+            try container.encode(transform.toExtensionDictionary(), forKey: .extensions)
+        }
     }
 }
 
 /// Occlusion (AO) texture reference with the per-spec `strength` parameter.
-public struct GLTFOcclusionTextureInfo: Codable {
+public struct GLTFOcclusionTextureInfo: Codable, Sendable {
     /// Index into ``GLTFDocument/textures``.
     public let index: Int
     /// UV channel index. Defaults to 0.
@@ -553,6 +768,18 @@ public struct GLTFOcclusionTextureInfo: Codable {
         case index, texCoord, strength, extensions
     }
 
+    public init(
+        index: Int,
+        texCoord: Int? = nil,
+        strength: Float? = nil,
+        khrTextureTransform: GLTFKHRTextureTransform? = nil
+    ) {
+        self.index = index
+        self.texCoord = texCoord
+        self.strength = strength
+        self.khrTextureTransform = khrTextureTransform
+    }
+
     /// Decodes the texture reference and, if present, the `KHR_texture_transform` extension.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -562,27 +789,36 @@ public struct GLTFOcclusionTextureInfo: Codable {
         khrTextureTransform = GLTFKHRTextureTransform.decodeExtension(from: container, key: .extensions)
     }
 
-    /// Encodes the texture reference. The `KHR_texture_transform` payload is not re-emitted.
+    /// Encodes the texture reference and any `KHR_texture_transform` extension.
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(index, forKey: .index)
         try container.encodeIfPresent(texCoord, forKey: .texCoord)
         try container.encodeIfPresent(strength, forKey: .strength)
+        if let transform = khrTextureTransform {
+            try container.encode(transform.toExtensionDictionary(), forKey: .extensions)
+        }
     }
 }
 
 /// A glTF 2.0 [texture](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#textures): a pairing of a sampler with an image source.
-public struct GLTFTexture: Codable {
+public struct GLTFTexture: Codable, Sendable {
     /// Index into ``GLTFDocument/samplers``, or `nil` for default sampling.
     public let sampler: Int?
     /// Index into ``GLTFDocument/images``.
     public let source: Int?
     /// Optional texture name.
     public let name: String?
+
+    public init(sampler: Int? = nil, source: Int? = nil, name: String? = nil) {
+        self.sampler = sampler
+        self.source = source
+        self.name = name
+    }
 }
 
 /// A glTF 2.0 [image](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#images), either embedded in a buffer view or referenced by URI.
-public struct GLTFImage: Codable {
+public struct GLTFImage: Codable, Sendable {
     /// External file path or `data:` URI. Mutually exclusive with ``bufferView``.
     public let uri: String?
     /// MIME type (`"image/png"`, `"image/jpeg"`, …) when referencing a buffer view.
@@ -591,10 +827,17 @@ public struct GLTFImage: Codable {
     public let bufferView: Int?
     /// Optional image name.
     public let name: String?
+
+    public init(uri: String? = nil, mimeType: String? = nil, bufferView: Int? = nil, name: String? = nil) {
+        self.uri = uri
+        self.mimeType = mimeType
+        self.bufferView = bufferView
+        self.name = name
+    }
 }
 
 /// A glTF 2.0 [sampler](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#samplers): filter and wrap modes encoded as OpenGL constants.
-public struct GLTFSampler: Codable {
+public struct GLTFSampler: Codable, Sendable {
     /// Magnification filter (`9728` NEAREST, `9729` LINEAR).
     public let magFilter: Int?
     /// Minification filter (NEAREST/LINEAR plus mipmap variants).
@@ -603,20 +846,33 @@ public struct GLTFSampler: Codable {
     public let wrapS: Int?
     /// T-axis wrap mode (same constants as ``wrapS``).
     public let wrapT: Int?
+
+    public init(magFilter: Int? = nil, minFilter: Int? = nil, wrapS: Int? = nil, wrapT: Int? = nil) {
+        self.magFilter = magFilter
+        self.minFilter = minFilter
+        self.wrapS = wrapS
+        self.wrapT = wrapT
+    }
 }
 
 /// A glTF 2.0 [buffer](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#buffers): a contiguous binary blob.
-public struct GLTFBuffer: Codable {
+public struct GLTFBuffer: Codable, Sendable {
     /// Total length in bytes.
     public let byteLength: Int
     /// External `.bin` path or `data:` URI. `nil` for the GLB binary chunk (buffer 0).
     public let uri: String?
     /// Optional buffer name.
     public let name: String?
+
+    public init(byteLength: Int, uri: String? = nil, name: String? = nil) {
+        self.byteLength = byteLength
+        self.uri = uri
+        self.name = name
+    }
 }
 
 /// A glTF 2.0 [bufferView](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#buffer-views): a sub-range of a buffer.
-public struct GLTFBufferView: Codable {
+public struct GLTFBufferView: Codable, Sendable {
     /// Index into ``GLTFDocument/buffers``.
     public let buffer: Int
     /// Offset into the parent buffer in bytes.
@@ -629,10 +885,26 @@ public struct GLTFBufferView: Codable {
     public let target: Int?
     /// Optional bufferView name.
     public let name: String?
+
+    public init(
+        buffer: Int,
+        byteOffset: Int? = nil,
+        byteLength: Int,
+        byteStride: Int? = nil,
+        target: Int? = nil,
+        name: String? = nil
+    ) {
+        self.buffer = buffer
+        self.byteOffset = byteOffset
+        self.byteLength = byteLength
+        self.byteStride = byteStride
+        self.target = target
+        self.name = name
+    }
 }
 
 /// A glTF 2.0 [accessor](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#accessors): a typed view into a buffer view.
-public struct GLTFAccessor: Codable {
+public struct GLTFAccessor: Codable, Sendable {
     /// Index into ``GLTFDocument/bufferViews``, or `nil` for sparse-only accessors.
     public let bufferView: Int?
     /// Offset into the bufferView in bytes.
@@ -653,38 +925,79 @@ public struct GLTFAccessor: Codable {
     public let sparse: GLTFSparse?
     /// Optional accessor name.
     public let name: String?
+
+    public init(
+        bufferView: Int? = nil,
+        byteOffset: Int? = nil,
+        componentType: Int,
+        count: Int,
+        type: String,
+        max: [Float]? = nil,
+        min: [Float]? = nil,
+        normalized: Bool? = nil,
+        sparse: GLTFSparse? = nil,
+        name: String? = nil
+    ) {
+        self.bufferView = bufferView
+        self.byteOffset = byteOffset
+        self.componentType = componentType
+        self.count = count
+        self.type = type
+        self.max = max
+        self.min = min
+        self.normalized = normalized
+        self.sparse = sparse
+        self.name = name
+    }
 }
 
 /// Sparse-accessor descriptor. See [glTF 2.0 §5.1.7](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#sparse-accessors).
-public struct GLTFSparse: Codable {
+public struct GLTFSparse: Codable, Sendable {
     /// Number of overridden elements.
     public let count: Int
     /// Override indices descriptor.
     public let indices: GLTFSparseIndices
     /// Override values descriptor.
     public let values: GLTFSparseValues
+
+    public init(count: Int, indices: GLTFSparseIndices, values: GLTFSparseValues) {
+        self.count = count
+        self.indices = indices
+        self.values = values
+    }
 }
 
 /// Indices half of a sparse accessor: where each override goes.
-public struct GLTFSparseIndices: Codable {
+public struct GLTFSparseIndices: Codable, Sendable {
     /// BufferView holding the index array.
     public let bufferView: Int
     /// Offset into the bufferView in bytes.
     public let byteOffset: Int?
     /// Component type (must be one of `UNSIGNED_BYTE`/`UNSIGNED_SHORT`/`UNSIGNED_INT`).
     public let componentType: Int
+
+    public init(bufferView: Int, byteOffset: Int? = nil, componentType: Int) {
+        self.bufferView = bufferView
+        self.byteOffset = byteOffset
+        self.componentType = componentType
+    }
 }
 
 /// Values half of a sparse accessor: replacement element data, matching the parent accessor's `componentType`.
-public struct GLTFSparseValues: Codable {
+public struct GLTFSparseValues: Codable, Sendable {
     /// BufferView holding the replacement values.
     public let bufferView: Int
     /// Offset into the bufferView in bytes.
     public let byteOffset: Int?
+
+    public init(bufferView: Int, byteOffset: Int? = nil) {
+        self.bufferView = bufferView
+        self.byteOffset = byteOffset
+    }
 }
 
 /// A glTF 2.0 [skin](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#skins): the joint hierarchy used for skinning.
-public struct GLTFSkin: Codable {
+public struct GLTFSkin: Codable, Sendable {
     /// Accessor index for the joint inverse-bind matrices (`MAT4` × `joints.count`). Identity is assumed when omitted.
     public let inverseBindMatrices: Int?
     /// Optional skeleton root node.
@@ -693,42 +1006,71 @@ public struct GLTFSkin: Codable {
     public let joints: [Int]
     /// Optional skin name.
     public let name: String?
+
+    public init(inverseBindMatrices: Int? = nil, skeleton: Int? = nil, joints: [Int], name: String? = nil) {
+        self.inverseBindMatrices = inverseBindMatrices
+        self.skeleton = skeleton
+        self.joints = joints
+        self.name = name
+    }
 }
 
 /// A glTF 2.0 [animation](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#animations) container.
-public struct GLTFAnimation: Codable {
+public struct GLTFAnimation: Codable, Sendable {
     /// Channels binding samplers to node targets.
     public let channels: [GLTFAnimationChannel]
     /// Samplers providing input (time) and output (value) curves.
     public let samplers: [GLTFAnimationSampler]
     /// Optional animation name.
     public let name: String?
+
+    public init(channels: [GLTFAnimationChannel], samplers: [GLTFAnimationSampler], name: String? = nil) {
+        self.channels = channels
+        self.samplers = samplers
+        self.name = name
+    }
 }
 
 /// Binding of an animation sampler to a target property on a node.
-public struct GLTFAnimationChannel: Codable {
+public struct GLTFAnimationChannel: Codable, Sendable {
     /// Index into the parent animation's samplers array.
     public let sampler: Int
     /// Target node and path.
     public let target: GLTFAnimationTarget
+
+    public init(sampler: Int, target: GLTFAnimationTarget) {
+        self.sampler = sampler
+        self.target = target
+    }
 }
 
 /// Animation channel target: which property on which node.
-public struct GLTFAnimationTarget: Codable {
+public struct GLTFAnimationTarget: Codable, Sendable {
     /// Target node index.
     public let node: Int?
     /// Animated property (`"translation"`, `"rotation"`, `"scale"`, or `"weights"` for morphs).
     public let path: String
+
+    public init(node: Int? = nil, path: String) {
+        self.node = node
+        self.path = path
+    }
 }
 
 /// Animation sampler: input keyframe times and output values with an interpolation mode.
-public struct GLTFAnimationSampler: Codable {
+public struct GLTFAnimationSampler: Codable, Sendable {
     /// Accessor of keyframe times (`SCALAR` `FLOAT`, monotonically increasing).
     public let input: Int
     /// Interpolation mode (`"LINEAR"`, `"STEP"`, `"CUBICSPLINE"`). Defaults to `"LINEAR"`.
     public let interpolation: String?
     /// Accessor of keyframe values; shape depends on the channel target path.
     public let output: Int
+
+    public init(input: Int, interpolation: String? = nil, output: Int) {
+        self.input = input
+        self.interpolation = interpolation
+        self.output = output
+    }
 }
 
 // MARK: - GLB Parser

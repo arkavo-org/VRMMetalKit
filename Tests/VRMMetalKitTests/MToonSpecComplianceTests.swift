@@ -362,7 +362,8 @@ final class MToonSpecComplianceTests: XCTestCase {
         materials: [[String: Any]],
         extraExtensions: [String]
     ) throws -> Data {
-        let gltfData = try JSONEncoder().encode(vrm.gltf)
+        let gltf = try XCTUnwrap(vrm.gltf)
+        let gltfData = try JSONEncoder().encode(gltf)
         var gltfDict = try JSONSerialization.jsonObject(with: gltfData) as! [String: Any]
 
         gltfDict["materials"] = materials
@@ -386,7 +387,7 @@ final class MToonSpecComplianceTests: XCTestCase {
         extensions["VRMC_vrm"] = vrmcVrm
         gltfDict["extensions"] = extensions
 
-        let binaryData = vrm.gltf.binaryBufferData ?? Data()
+        let binaryData = gltf.binaryBufferData ?? Data()
         return try createGLB(json: gltfDict, binaryData: binaryData)
     }
 

@@ -530,9 +530,14 @@ extension VRMModel {
         adding asset: VRMCosmeticAsset,
         limits: VRMLoaderLimits
     ) throws {
-        let hostBufferBytes = gltf.buffers?.reduce(0) { $0 + max(0, $1.byteLength) } ?? 0
-        let existingAttachedBytes = attachments.reduce(0) { $0 + $1.estimatedBufferBytes }
-        let totalBytes = hostBufferBytes + existingAttachedBytes + asset.estimatedBufferBytes
+        let hostBufferBytes: Int
+        if let gltfBuffers = gltf?.buffers {
+            hostBufferBytes = try VRMModel.checkedSumBufferBytes(gltfBuffers.map { max(0, $0.byteLength) }, limit: limits.maxTotalBufferBytes)
+        } else {
+            hostBufferBytes = estimatedHostBufferBytes
+        }
+        let existingAttachedBytes = try VRMModel.checkedSumBufferBytes(attachments.map { max(0, $0.estimatedBufferBytes) }, limit: limits.maxTotalBufferBytes)
+        let totalBytes = try VRMModel.checkedSumBufferBytes([hostBufferBytes, existingAttachedBytes, max(0, asset.estimatedBufferBytes)], limit: limits.maxTotalBufferBytes)
         if totalBytes > limits.maxTotalBufferBytes {
             throw VRMError.limitExceeded(
                 kind: "totalBufferBytes",
