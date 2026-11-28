@@ -38,7 +38,83 @@ import Metal
 /// cannot represent unpremultiplied 8-bit RGBA — premultiplies and quantizes
 /// to 8 bits, and unpremultiplying afterwards only approximates the inverse:
 /// error grows as 1/alpha, and texels at alpha 0 lose their color outright.
-enum TextureUploader {
+public enum TextureUploader {
+
+    /// Uploads straight-alpha RGBA8 pixel bytes directly to an `MTLTexture`,
+    /// bypassing ImageIO / PNG decoding.
+    ///
+    /// - Parameters:
+    ///   - rgba8Bytes: Read-only buffer of straight-alpha RGBA8 pixels (4 bytes per pixel).
+    ///   - width: Texture width in pixels (must be `> 0`).
+    ///   - height: Texture height in pixels (must be `> 0`).
+    ///   - bytesPerRow: Row stride in bytes; defaults to `width * 4` when `nil`.
+    ///   - pixelFormat: `.rgba8Unorm` (linear data) or `.rgba8Unorm_srgb` (sRGB color).
+    ///   - device: Metal device to allocate on.
+    ///   - mipmapped: When `true`, generates a straight-alpha linear-light mip chain.
+    ///   - alphaIsCoverage: When `mipmapped` is `true`, weights RGB by alpha (for MASK/BLEND base colors).
+    ///   - blockCompress: When `true` and the device supports BC7, re-encodes the uploaded texture as BC7.
+    /// - Returns: The uploaded `MTLTexture`, or `nil` if dimensions/buffer length are invalid or allocation fails.
+    public static func makeTexture(
+        rgba8Bytes: UnsafeRawBufferPointer,
+        width: Int,
+        height: Int,
+        bytesPerRow: Int? = nil,
+        pixelFormat: MTLPixelFormat,
+        device: MTLDevice,
+        mipmapped: Bool = true,
+        alphaIsCoverage: Bool = false,
+        blockCompress: Bool = false
+    ) -> MTLTexture? {
+        guard width > 0, height > 0 else { return nil }
+        let minRowBytes = width * 4
+        let stride = bytesPerRow ?? minRowBytes
+        guard stride >= minRowBytes else { return nil }
+        let requiredBytes = stride * (height - 1) + minRowBytes
+        guard rgba8Bytes.count >= requiredBytes, let baseAddress = rgba8Bytes.baseAddress else {
+            return nil
+        }
+        return finalize(
+            upload(
+                straightBytes: baseAddress,
+                width: width,
+                height: height,
+                bytesPerRow: stride,
+                pixelFormat: pixelFormat,
+                device: device,
+                mipmapped: mipmapped,
+                alphaIsCoverage: alphaIsCoverage
+            ),
+            blockCompress: blockCompress,
+            device: device
+        )
+    }
+
+    /// Uploads straight-alpha RGBA8 `Data` directly to an `MTLTexture`, bypassing ImageIO / PNG decoding.
+    public static func makeTexture(
+        rgba8Data: Data,
+        width: Int,
+        height: Int,
+        bytesPerRow: Int? = nil,
+        pixelFormat: MTLPixelFormat,
+        device: MTLDevice,
+        mipmapped: Bool = true,
+        alphaIsCoverage: Bool = false,
+        blockCompress: Bool = false
+    ) -> MTLTexture? {
+        rgba8Data.withUnsafeBytes { raw in
+            makeTexture(
+                rgba8Bytes: raw,
+                width: width,
+                height: height,
+                bytesPerRow: bytesPerRow,
+                pixelFormat: pixelFormat,
+                device: device,
+                mipmapped: mipmapped,
+                alphaIsCoverage: alphaIsCoverage,
+                blockCompress: blockCompress
+            )
+        }
+    }
 
     /// Decodes the first image in `data`, eagerly.
     ///
@@ -221,7 +297,7 @@ enum TextureUploader {
     /// Both decode paths land here with straight-alpha bytes; the sampler's
     /// mip request picks the uploader, and the material's use of the texture
     /// says whether alpha weights the chain.
-    private static func upload(straightBytes: UnsafeMutableRawPointer,
+    private static func upload(straightBytes: UnsafeRawPointer,
                                width: Int, height: Int,
                                bytesPerRow: Int,
                                pixelFormat: MTLPixelFormat,
@@ -242,7 +318,7 @@ enum TextureUploader {
                           device: device)
     }
 
-    private static func makeTexture(bytes: UnsafeMutableRawPointer,
+    private static func makeTexture(bytes: UnsafeRawPointer,
                                     width: Int, height: Int,
                                     bytesPerRow: Int,
                                     pixelFormat: MTLPixelFormat,

@@ -245,8 +245,6 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
     // Reused buffer for writeBonesToNodes() chain walks; keeps capacity
     // across frames so springs don't each allocate their own tuple array.
-    private var chainNodePositions: [(VRMNode, SIMD3<Float>, Int)] = []
-
     // MARK: - Sleep gate state
     /// Per-chain contiguous bone ranges derived from `rootBoneIndices`. Used to
     /// attribute motion to individual spring chains for per-chain sleep decisions.
@@ -2717,6 +2715,66 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         snapshotLock.unlock()
     }
 
+    private struct CachedWritebackChain {
+        let chainIndex: Int
+        let nodes: [VRMNode]
+        let parents: [VRMNode?]
+        let globalIndices: [Int]
+        let isNextDirectChild: [Bool]
+    }
+    private var cachedWritebackChains: [CachedWritebackChain] = []
+    private var writebackCacheGeneration: UInt64 = .max
+    private var writebackCacheHierarchyRevision: UInt64 = .max
+
+    private func refreshWritebackCacheIfNeeded(layout: ComposedSpringBoneLayout, boneCount: Int) {
+        let hierarchyRev = VRMNode.parentHierarchyRevision.load(ordering: .relaxed)
+        if writebackCacheGeneration == physicsLayoutGeneration
+            && writebackCacheHierarchyRevision == hierarchyRev
+            && !cachedWritebackChains.isEmpty {
+            return
+        }
+        cachedWritebackChains.removeAll(keepingCapacity: true)
+        cachedWritebackChains.reserveCapacity(layout.chains.count)
+        var globalBoneIndex = 0
+        for (chainIndex, chain) in layout.chains.enumerated() {
+            guard !chain.jointNodes.isEmpty else { continue }
+            guard globalBoneIndex < boneCount else { break }
+
+            var nodes: [VRMNode] = []
+            var parents: [VRMNode?] = []
+            var globalIndices: [Int] = []
+            nodes.reserveCapacity(chain.jointNodes.count)
+            parents.reserveCapacity(chain.jointNodes.count)
+            globalIndices.reserveCapacity(chain.jointNodes.count)
+
+            for node in chain.jointNodes {
+                guard globalBoneIndex < boneCount else { break }
+                defer { globalBoneIndex += 1 }
+                guard let node else { continue }
+                nodes.append(node)
+                parents.append(node.parent)
+                globalIndices.append(globalBoneIndex)
+            }
+
+            if nodes.count >= 2 {
+                var isDirect: [Bool] = []
+                isDirect.reserveCapacity(nodes.count - 1)
+                for i in 0..<(nodes.count - 1) {
+                    isDirect.append(parents[i + 1] === nodes[i])
+                }
+                cachedWritebackChains.append(CachedWritebackChain(
+                    chainIndex: chainIndex,
+                    nodes: nodes,
+                    parents: parents,
+                    globalIndices: globalIndices,
+                    isNextDirectChild: isDirect
+                ))
+            }
+        }
+        writebackCacheGeneration = physicsLayoutGeneration
+        writebackCacheHierarchyRevision = hierarchyRev
+    }
+
     /// Read back GPU-computed bone positions and update VRMNode transforms
     func writeBonesToNodes(model: VRMModel) {
         guard let layout = activeLayout,
@@ -2761,34 +2819,23 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             return
         }
         skippedReadbacks = 0
-        let positions = writebackPositions
 
         performanceTracker?.beginPhase(.springReadback)
         defer { performanceTracker?.endPhase(.springReadback) }
 
-        var globalBoneIndex = 0
-        chainNodePositions.reserveCapacity(32)
-        for (chainIndex, chain) in layout.chains.enumerated() {
-            guard !chain.jointNodes.isEmpty else { continue }
-            guard globalBoneIndex < positions.count else { break }
+        refreshWritebackCacheIfNeeded(layout: layout, boneCount: writebackPositions.count)
 
-            // Skip the CPU writeback for chains that are fully asleep; their
-            // node transforms are unchanged from the previous frame.
-            if chainIndex < sleepGate.asleep.count && sleepGate.asleep[chainIndex] {
-                globalBoneIndex += chain.jointNodes.count
-                continue
-            }
-
-            chainNodePositions.removeAll(keepingCapacity: true)
-            for node in chain.jointNodes {
-                guard globalBoneIndex < positions.count else { break }
-                defer { globalBoneIndex += 1 }
-                guard let node else { continue }
-                chainNodePositions.append((node, positions[globalBoneIndex], globalBoneIndex))
-            }
-
-            if chainNodePositions.count >= 2 {
-                updateNodeTransformsForChain(nodePositions: chainNodePositions)
+        let asleepFlags = sleepGate.asleep
+        let asleepCount = asleepFlags.count
+        writebackPositions.withUnsafeBufferPointer { posBuf in
+            guard let posBase = posBuf.baseAddress else { return }
+            let posCount = posBuf.count
+            for c in 0..<cachedWritebackChains.count {
+                let chain = cachedWritebackChains[c]
+                if chain.chainIndex < asleepCount && asleepFlags[chain.chainIndex] {
+                    continue
+                }
+                updateNodeTransformsForChain(chain: chain, positions: posBase, positionCount: posCount)
             }
         }
     }
@@ -2797,18 +2844,38 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     private var rotationDiagCounter = 0
     #endif
 
-    private func updateNodeTransformsForChain(nodePositions: [(VRMNode, SIMD3<Float>, Int)]) {
+    private func updateNodeTransformsForChain(
+        chain: CachedWritebackChain,
+        positions: UnsafePointer<SIMD3<Float>>,
+        positionCount: Int
+    ) {
         #if VRM_METALKIT_ENABLE_DEBUG_PHYSICS
         rotationDiagCounter += 1
         let shouldLog = rotationDiagCounter <= 5 || rotationDiagCounter % 60 == 0
         #endif
 
+        let nodes = chain.nodes
+        let parents = chain.parents
+        let globalIndices = chain.globalIndices
+        let isNextDirectChild = chain.isNextDirectChild
+        let lastIndex = nodes.count - 1
+
         // Update bone rotations to point toward physics-simulated positions
-        let lastIndex = nodePositions.count - 1
         for i in 0..<lastIndex {
-            let (currentNode, currentPos, globalIndex) = nodePositions[i]
-            let (nextNode, nextPos, _) = nodePositions[i + 1]
-            defer { propagateChainNode(currentNode, nextChainNode: nextNode) }
+            let currentNode = nodes[i]
+            let nextNode = nodes[i + 1]
+            let globalIndex = globalIndices[i]
+            let nextGlobalIndex = globalIndices[i + 1]
+            guard globalIndex < positionCount, nextGlobalIndex < positionCount else { break }
+
+            let currentPos = positions[globalIndex]
+            let nextPos = positions[nextGlobalIndex]
+            let parent = parents[i]
+            let directChild = isNextDirectChild[i]
+
+            defer {
+                propagateChainNode(currentNode, parent: parent, nextChainNode: nextNode, isDirectChild: directChild)
+            }
 
             // NaN guard: skip if positions are invalid
             if currentPos.x.isNaN || currentPos.y.isNaN || currentPos.z.isNaN ||
@@ -2829,7 +2896,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             // This computes ABSOLUTE rotation, not accumulated delta.
 
             // Get parent's world rotation (CURRENT, after earlier bones in chain were updated)
-            guard let parent = currentNode.parent else { continue }
+            guard let parent else { continue }
             let parentRot = extractRotation(from: parent.worldMatrix)
 
             // NaN guard for parent rotation
@@ -2931,13 +2998,19 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
             #endif
 
-            currentNode.rotation = newRotation
-            currentNode.updateLocalMatrix()
+            if currentNode.rotation != newRotation {
+                currentNode.rotation = newRotation
+                currentNode.updateLocalMatrix()
+            }
         }
 
         // Propagate the final tip node (and any of its descendants) once after the chain loop.
         if lastIndex >= 0 {
-            nodePositions[lastIndex].0.updateWorldTransform()
+            if let tipParent = parents[lastIndex] {
+                nodes[lastIndex].updateWorldTransformFromParent(tipParent.worldMatrix)
+            } else {
+                nodes[lastIndex].updateWorldTransform()
+            }
         }
     }
 
@@ -2945,17 +3018,35 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// (which will be updated in the next iteration of the chain loop), while still
     /// propagating to any side-branch children so the entire subtree remains consistent.
     @inline(__always)
-    private func propagateChainNode(_ node: VRMNode, nextChainNode: VRMNode) {
-        if nextChainNode.parent === node {
-            node.updateWorldTransformShallow()
-            if node.children.count > 1 {
-                for child in node.children where child !== nextChainNode {
-                    child.updateWorldTransform()
+    private func propagateChainNode(
+        _ node: VRMNode,
+        parent: VRMNode?,
+        nextChainNode: VRMNode,
+        isDirectChild: Bool
+    ) {
+        if isDirectChild {
+            if let parent {
+                node.updateWorldTransformShallow(parentWorld: parent.worldMatrix)
+            } else {
+                node.updateWorldTransformShallow()
+            }
+            let children = node.children
+            if children.count > 1 {
+                let myWorld = node.worldMatrix
+                for i in 0..<children.count {
+                    let child = children[i]
+                    if child !== nextChainNode {
+                        child.updateWorldTransformFromParent(myWorld)
+                    }
                 }
             }
         } else {
             // Non-contiguous chain topology (intermediate non-spring bone): fall back to full walk.
-            node.updateWorldTransform()
+            if let parent {
+                node.updateWorldTransformFromParent(parent.worldMatrix)
+            } else {
+                node.updateWorldTransform()
+            }
         }
     }
 

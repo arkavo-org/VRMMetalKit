@@ -91,6 +91,74 @@ public final class VRMModelEditor {
         }
     }
 
+    /// Replaces the GPU texture backing `model.textures[index]` directly from raw straight-alpha
+    /// RGBA8 pixel bytes, bypassing GLB re-serialization and ImageIO decoding.
+    ///
+    /// Every `VRMMaterial` referencing `model.textures[index]` immediately renders with the new
+    /// texture on the next draw, and ``VRMModel/materialRevision`` is bumped when the edit exits.
+    public func replaceTexture(
+        at index: Int,
+        rgba8Data: Data,
+        width: Int,
+        height: Int,
+        bytesPerRow: Int? = nil,
+        sRGB: Bool = true,
+        mipmapped: Bool = true,
+        alphaIsCoverage: Bool = false,
+        blockCompress: Bool = false,
+        sampler: MTLSamplerState? = nil,
+        device: MTLDevice? = nil
+    ) throws {
+        guard index >= 0 && index < model.textures.count else {
+            throw GLTFError.missingTexture(
+                textureIndex: index,
+                materialName: nil,
+                uri: nil,
+                filePath: model.baseURL?.path
+            )
+        }
+        guard let targetDevice = device ?? model.device else {
+            throw GLTFError.invalidImageData(
+                textureIndex: index,
+                reason: "No MTLDevice available on VRMModel or replaceTexture(at:) call",
+                filePath: model.baseURL?.path
+            )
+        }
+        let uploaded = try VRMTexture.makeRGBA8(
+            data: rgba8Data,
+            width: width,
+            height: height,
+            bytesPerRow: bytesPerRow,
+            sRGB: sRGB,
+            mipmapped: mipmapped,
+            alphaIsCoverage: alphaIsCoverage,
+            blockCompress: blockCompress,
+            name: model.textures[index].name,
+            sampler: sampler,
+            device: targetDevice
+        )
+        model.textures[index].mtlTexture = uploaded.mtlTexture
+        if let sampler {
+            model.textures[index].sampler = sampler
+        }
+        materialsDirty = true
+    }
+
+    /// Replaces the GPU texture backing `model.textures[index]` with an already-allocated
+    /// `MTLTexture` (such as an ASTC, BC7, or pre-uploaded RGBA8 texture).
+    public func replaceTexture(
+        at index: Int,
+        mtlTexture: MTLTexture,
+        sampler: MTLSamplerState? = nil
+    ) {
+        guard index >= 0 && index < model.textures.count else { return }
+        model.textures[index].mtlTexture = mtlTexture
+        if let sampler {
+            model.textures[index].sampler = sampler
+        }
+        materialsDirty = true
+    }
+
     /// Sets ``VRMNode/isHidden`` on the node at `index` and marks visibility modified.
     public func setNodeHidden(_ hidden: Bool, at index: Int) {
         guard index >= 0 && index < model.nodes.count else { return }

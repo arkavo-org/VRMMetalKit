@@ -22,6 +22,69 @@
 //
 
 import Foundation
+@preconcurrency import Metal
+
+// MARK: - VRMPreloadedTexture
+
+/// Source payload for an in-memory texture supplied to ``VRMLoadingOptions/preloadedTextures``.
+///
+/// Allows authoring hosts (such as `VRMAuthorKit`) to feed straight-alpha RGBA8 pixel buffers
+/// or already-allocated Metal textures (e.g. ASTC, BC7, or pre-uploaded RGBA8) directly into
+/// `VRMModel.load(...)`, bypassing PNG encoding and ImageIO decoding.
+public enum VRMPreloadedTextureSource: @unchecked Sendable {
+    /// Straight-alpha RGBA8 pixel bytes (4 bytes per pixel).
+    case rgba8(data: Data, width: Int, height: Int, bytesPerRow: Int? = nil)
+    /// Already-allocated GPU texture adopted directly without re-upload.
+    case mtlTexture(MTLTexture)
+}
+
+/// A pre-decoded or pre-uploaded texture override keyed by glTF texture index in ``VRMLoadingOptions/preloadedTextures``.
+public struct VRMPreloadedTexture: Sendable {
+    /// Pixel buffer or pre-allocated `MTLTexture` payload.
+    public let source: VRMPreloadedTextureSource
+    /// Optional color-space override (`nil` infers sRGB vs linear from the glTF material bindings).
+    public let sRGB: Bool?
+    /// Optional mipmap override (`nil` honors the glTF sampler's minFilter).
+    public let mipmapped: Bool?
+    /// Optional alpha-coverage mipmap override (`nil` infers from MASK/BLEND base-color bindings).
+    public let alphaIsCoverage: Bool?
+
+    /// Creates an in-memory texture override.
+    public init(
+        source: VRMPreloadedTextureSource,
+        sRGB: Bool? = nil,
+        mipmapped: Bool? = nil,
+        alphaIsCoverage: Bool? = nil
+    ) {
+        self.source = source
+        self.sRGB = sRGB
+        self.mipmapped = mipmapped
+        self.alphaIsCoverage = alphaIsCoverage
+    }
+
+    /// Convenience factory for a straight-alpha RGBA8 pixel buffer.
+    public static func rgba8(
+        data: Data,
+        width: Int,
+        height: Int,
+        bytesPerRow: Int? = nil,
+        sRGB: Bool? = nil,
+        mipmapped: Bool? = nil,
+        alphaIsCoverage: Bool? = nil
+    ) -> VRMPreloadedTexture {
+        VRMPreloadedTexture(
+            source: .rgba8(data: data, width: width, height: height, bytesPerRow: bytesPerRow),
+            sRGB: sRGB,
+            mipmapped: mipmapped,
+            alphaIsCoverage: alphaIsCoverage
+        )
+    }
+
+    /// Convenience factory for an already-allocated `MTLTexture` (e.g. ASTC, BC7, or RGBA8).
+    public static func mtlTexture(_ texture: MTLTexture) -> VRMPreloadedTexture {
+        VRMPreloadedTexture(source: .mtlTexture(texture))
+    }
+}
 
 // MARK: - VRMLoadingPhase
 
@@ -273,6 +336,10 @@ public struct VRMLoadingOptions: Sendable {
     /// Memory and structural quotas enforced during model loading.
     public let limits: VRMLoaderLimits
 
+    /// Optional map from glTF texture index to an in-memory raw RGBA8 buffer or pre-allocated
+    /// `MTLTexture`. Matching texture indices bypass ImageIO decoding completely.
+    public let preloadedTextures: [Int: VRMPreloadedTexture]
+
     /// Creates loading options.
     ///
     /// - Parameters:
@@ -284,13 +351,15 @@ public struct VRMLoadingOptions: Sendable {
     ///   - optimizations: Performance optimizations to apply (default: .default).
     ///   - augmentSpringBoneColliders: Synthesize bone-derived colliders additive to authored ones (default: true).
     ///   - limits: Configurable memory and structural quotas enforced during load (default: `.default`).
+    ///   - preloadedTextures: Optional in-memory texture overrides keyed by glTF texture index (default: empty).
     public init(
         progressCallback: (@Sendable (VRMLoadingProgress) -> Void)? = nil,
         progressUpdateInterval: TimeInterval = 0.1,
         enableCancellation: Bool = true,
         optimizations: VRMLoadingOptimization = .default,
         augmentSpringBoneColliders: Bool = true,
-        limits: VRMLoaderLimits = .default
+        limits: VRMLoaderLimits = .default,
+        preloadedTextures: [Int: VRMPreloadedTexture] = [:]
     ) {
         self.progressCallback = progressCallback
         self.progressUpdateInterval = progressUpdateInterval
@@ -298,6 +367,7 @@ public struct VRMLoadingOptions: Sendable {
         self.optimizations = optimizations
         self.augmentSpringBoneColliders = augmentSpringBoneColliders
         self.limits = limits
+        self.preloadedTextures = preloadedTextures
     }
     
     /// Default options: no progress callback, cancellation enabled, ``VRMLoadingOptimization/default`` optimizations.

@@ -45,17 +45,36 @@ public enum MToonOutlineDraw {
     /// so both faces stay visible on the color draw.
     public static func shouldMerge(
         globalOutlineWidth: Float,
-        mtoon: VRMMToonMaterial?,
+        mtoon: borrowing VRMMToonMaterial?,
         isDoubleSided: Bool
     ) -> Bool {
-        guard globalOutlineWidth > 0,
-              let mtoon,
-              mtoon.outlineWidthMode != .none,
-              mtoon.outlineWidthFactor > 0.0001,
-              !isDoubleSided else {
+        guard globalOutlineWidth > 0, !isDoubleSided else {
             return false
         }
-        return true
+        switch mtoon {
+        case .none:
+            return false
+        case .some(let value):
+            return shouldMerge(
+                globalOutlineWidth: globalOutlineWidth,
+                outlineWidthMode: value.outlineWidthMode,
+                outlineWidthFactor: value.outlineWidthFactor,
+                isDoubleSided: isDoubleSided
+            )
+        }
+    }
+
+    @inline(__always)
+    internal static func shouldMerge(
+        globalOutlineWidth: Float,
+        outlineWidthMode: VRMOutlineWidthMode,
+        outlineWidthFactor: Float,
+        isDoubleSided: Bool
+    ) -> Bool {
+        globalOutlineWidth > 0
+            && outlineWidthMode != .none
+            && outlineWidthFactor > 0.0001
+            && !isDoubleSided
     }
 
     /// Whether the merged hull draw is actually encoded for a primitive that

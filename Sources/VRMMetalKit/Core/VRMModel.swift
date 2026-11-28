@@ -681,8 +681,11 @@ public class VRMModel: VRMSceneContent, @unchecked Sendable {
     /// ```
     ///
     /// ## Performance
-    /// Loading is asynchronous and may take 100-500ms depending on model complexity.
-    /// Textures are loaded in parallel for better performance.
+    /// Loading is marked `@concurrent` so callers isolated to `@MainActor`
+    /// (including Swift 6 projects using `ApproachableConcurrency`) always
+    /// execute parsing, texture decoding, and GPU upload on the concurrent
+    /// executor rather than stalling the UI thread.
+    @concurrent
     public static func load(
         from url: URL,
         device: MTLDevice? = nil,
@@ -713,6 +716,7 @@ public class VRMModel: VRMSceneContent, @unchecked Sendable {
     ///
     /// Use this method when loading from network responses or in-memory data.
     /// External relative resource URIs are not resolved for in-memory loads (`baseURL` remains `nil`).
+    /// Marked `@concurrent` so `@MainActor` callers run parsing and texture decoding off the main thread.
     ///
     /// - Parameters:
     ///   - data: Raw VRM/GLB file data.
@@ -724,6 +728,7 @@ public class VRMModel: VRMSceneContent, @unchecked Sendable {
     /// - Returns: A fully loaded `VRMModel` ready for rendering.
     ///
     /// - Throws: `VRMError` if the data is invalid or exceeds configured quotas.
+    @concurrent
     public static func load(
         from data: Data,
         filePath: String? = nil,
@@ -748,7 +753,56 @@ public class VRMModel: VRMSceneContent, @unchecked Sendable {
         )
     }
 
+    /// Loads a VRM model directly from an already-constructed ``GLTFDocument`` and
+    /// optional binary buffer, bypassing GLB container serialization and JSON parsing.
+    ///
+    /// Designed for interactive authoring hosts (such as `VRMAuthorKit`) that construct
+    /// glTF documents and raw RGBA8 / `MTLTexture` assets in memory. Pair with
+    /// ``VRMLoadingOptions/preloadedTextures`` to skip PNG encoding and ImageIO decoding.
+    /// Marked `@concurrent` so `@MainActor` callers execute off the main thread.
+    ///
+    /// - Parameters:
+    ///   - document: Parsed or in-memory ``GLTFDocument`` containing `VRMC_vrm` or `VRM`.
+    ///   - binaryData: Optional binary buffer payload backing buffer index 0.
+    ///   - filePath: Optional identifier for error messages.
+    ///   - baseURL: Optional base directory for resolving external URIs.
+    ///   - device: Optional Metal device for GPU resources.
+    ///   - options: Optional loading options (including ``VRMLoadingOptions/preloadedTextures``).
+    ///   - limits: Optional override for ``VRMLoaderLimits``. Defaults to `options?.limits ?? .default`.
+    ///
+    /// - Returns: A fully loaded `VRMModel` ready for rendering.
+    ///
+    /// - Throws: `VRMError` or `GLTFError` if the document is invalid or exceeds configured quotas.
+    @concurrent
+    public static func load(
+        document: GLTFDocument,
+        binaryData: Data? = nil,
+        filePath: String? = nil,
+        baseURL: URL? = nil,
+        device: MTLDevice? = nil,
+        options: VRMLoadingOptions? = nil,
+        limits: VRMLoaderLimits? = nil
+    ) async throws -> VRMModel {
+        let context: VRMLoadingContext?
+        if let options {
+            context = await VRMLoadingContext(options: options)
+        } else {
+            context = nil
+        }
+        let effectiveLimits = limits ?? options?.limits ?? .default
+        return try await loadParsed(
+            document: document,
+            binaryData: binaryData,
+            filePath: filePath,
+            baseURL: baseURL,
+            device: device,
+            context: context,
+            limits: effectiveLimits
+        )
+    }
+
     /// Internal loading method with context for progress, cancellation, and loader limits.
+    @concurrent
     private static func load(
         from data: Data,
         filePath: String? = nil,
@@ -770,6 +824,29 @@ public class VRMModel: VRMSceneContent, @unchecked Sendable {
         if !skipLogging {
             vrmLog("[VRMModel] Parsed GLTF document")
         }
+
+        return try await loadParsed(
+            document: document,
+            binaryData: binaryData,
+            filePath: filePath,
+            baseURL: baseURL,
+            device: device,
+            context: context,
+            limits: limits
+        )
+    }
+
+    /// Shared post-parse loading pipeline used by both GLB/Data loads and direct in-memory document loads.
+    @concurrent
+    private static func loadParsed(
+        document: GLTFDocument,
+        binaryData: Data?,
+        filePath: String? = nil,
+        baseURL: URL? = nil,
+        device: MTLDevice? = nil,
+        context: VRMLoadingContext?,
+        limits: VRMLoaderLimits
+    ) async throws -> VRMModel {
 
         // Validate extensionsRequired against the set of extensions this runtime supports.
         // Per glTF spec §3.2: if any required extension is unsupported, loading MUST fail.

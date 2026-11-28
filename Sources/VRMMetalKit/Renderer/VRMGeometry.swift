@@ -1336,16 +1336,36 @@ public class VRMNode {
     /// Child nodes; rendering walks this hierarchy.
     public var children: [VRMNode] = []
 
+    /// Tracks the number of live nodes with `isHidden == true` so steady-state
+    /// `isEffectivelyHidden` checks return `false` in O(1) without walking weak parent pointers.
+    private static let hiddenNodeCount = Atomic<Int>(0)
+
     /// When `true`, the renderer skips this node and all of its descendants across color,
     /// depth-prepass, outline, and contact-shadow passes.
-    public var isHidden: Bool = false
+    public var isHidden: Bool = false {
+        didSet {
+            if isHidden != oldValue {
+                VRMNode.hiddenNodeCount.wrappingAdd(isHidden ? 1 : -1, ordering: .relaxed)
+            }
+        }
+    }
+
+    deinit {
+        if isHidden {
+            VRMNode.hiddenNodeCount.wrappingAdd(-1, ordering: .relaxed)
+        }
+    }
 
     /// Returns `true` when this node or any ancestor has ``isHidden`` set.
     public var isEffectivelyHidden: Bool {
-        var current: VRMNode? = self
+        if VRMNode.hiddenNodeCount.load(ordering: .relaxed) == 0 {
+            return false
+        }
+        if isHidden { return true }
+        var current = _parent
         while let node = current {
             if node.isHidden { return true }
-            current = node.parent
+            current = node._parent
         }
         return false
     }
@@ -1545,6 +1565,33 @@ public class VRMNode {
         localMatrixRebuildCount += 1
     }
 
+    /// Recomputes ``worldMatrix`` for this node only (no recursion into ``children``)
+    /// using an already-resolved `parentWorld` matrix, avoiding weak-reference loads.
+    @inline(__always)
+    internal func updateWorldTransformShallow(parentWorld: float4x4) {
+        if localMatrixDirty {
+            updateLocalMatrix()
+        }
+
+        let local = localMatrix
+        #if DEBUG
+        if local[0][0].isNaN || local[0][1].isNaN || local[0][2].isNaN || local[0][3].isNaN ||
+           local[1][0].isNaN || local[1][1].isNaN || local[1][2].isNaN || local[1][3].isNaN ||
+           local[2][0].isNaN || local[2][1].isNaN || local[2][2].isNaN || local[2][3].isNaN ||
+           local[3][0].isNaN || local[3][1].isNaN || local[3][2].isNaN || local[3][3].isNaN {
+            vrmLogAnimation("!!! CRITICAL ERROR: NaN detected in localMatrix for node \(name ?? "unnamed") BEFORE world transform update")
+            localMatrix = matrix_identity_float4x4
+        }
+        #endif
+
+        let newWorld = parentWorld * localMatrix
+        if !hasPublishedWorld || newWorld != worldMatrix {
+            worldMatrix = newWorld
+            worldGeneration &+= 1
+            hasPublishedWorld = true
+        }
+    }
+
     /// Recomputes ``worldMatrix`` for this node only (no recursion into ``children``).
     /// Used by SpringBone chain writeback to update chain joints in O(L) instead of O(L²).
     @inline(__always)
@@ -1564,7 +1611,7 @@ public class VRMNode {
         #endif
 
         let newWorld: float4x4
-        if let parent = parent {
+        if let parent = _parent {
             newWorld = parent.worldMatrix * localMatrix
         } else {
             newWorld = localMatrix
@@ -1590,8 +1637,29 @@ public class VRMNode {
     public func updateWorldTransform() {
         updateWorldTransformShallow()
 
-        for child in children {
-            child.updateWorldTransform()
+        let myWorld = worldMatrix
+        let childList = children
+        let count = childList.count
+        var i = 0
+        while i < count {
+            childList[i].updateWorldTransformFromParent(myWorld)
+            i &+= 1
+        }
+    }
+
+    /// Recursive world-transform propagation passing `parentWorld` directly down the tree
+    /// to avoid per-node weak-parent loads and dynamic dispatch.
+    internal func updateWorldTransformFromParent(_ parentWorld: float4x4) {
+        updateWorldTransformShallow(parentWorld: parentWorld)
+
+        let childList = children
+        let count = childList.count
+        guard count > 0 else { return }
+        let myWorld = worldMatrix
+        var i = 0
+        while i < count {
+            childList[i].updateWorldTransformFromParent(myWorld)
+            i &+= 1
         }
     }
 }
@@ -1684,6 +1752,84 @@ public class VRMTexture {
         self.name = name
         self.mtlTexture = mtlTexture
     }
+
+    /// Uploads straight-alpha RGBA8 pixel `Data` directly to a Metal texture without PNG/ImageIO decoding.
+    ///
+    /// Reuses VRMMetalKit's straight-alpha upload, coverage-aware linear-light mipmap generation,
+    /// and optional BC7 block-compression pipeline.
+    public static func makeRGBA8(
+        data: Data,
+        width: Int,
+        height: Int,
+        bytesPerRow: Int? = nil,
+        sRGB: Bool = true,
+        mipmapped: Bool = true,
+        alphaIsCoverage: Bool = false,
+        blockCompress: Bool = false,
+        name: String? = nil,
+        sampler: MTLSamplerState? = nil,
+        device: MTLDevice
+    ) throws -> VRMTexture {
+        let pixelFormat: MTLPixelFormat = sRGB ? .rgba8Unorm_srgb : .rgba8Unorm
+        guard let mtlTexture = TextureUploader.makeTexture(
+            rgba8Data: data,
+            width: width,
+            height: height,
+            bytesPerRow: bytesPerRow,
+            pixelFormat: pixelFormat,
+            device: device,
+            mipmapped: mipmapped,
+            alphaIsCoverage: alphaIsCoverage,
+            blockCompress: sRGB && blockCompress
+        ) else {
+            throw GLTFError.invalidImageData(
+                textureIndex: -1,
+                reason: "Failed to upload RGBA8 texture '\(name ?? "unnamed")' (\(width)x\(height), \(data.count) bytes)",
+                filePath: nil
+            )
+        }
+        let texture = VRMTexture(name: name, mtlTexture: mtlTexture)
+        texture.sampler = sampler
+        return texture
+    }
+
+    /// Uploads a straight-alpha RGBA8 `UnsafeRawBufferPointer` directly to a Metal texture
+    /// without copying into `Data` or invoking ImageIO.
+    public static func makeRGBA8(
+        bytes: UnsafeRawBufferPointer,
+        width: Int,
+        height: Int,
+        bytesPerRow: Int? = nil,
+        sRGB: Bool = true,
+        mipmapped: Bool = true,
+        alphaIsCoverage: Bool = false,
+        blockCompress: Bool = false,
+        name: String? = nil,
+        sampler: MTLSamplerState? = nil,
+        device: MTLDevice
+    ) throws -> VRMTexture {
+        let pixelFormat: MTLPixelFormat = sRGB ? .rgba8Unorm_srgb : .rgba8Unorm
+        guard let mtlTexture = TextureUploader.makeTexture(
+            rgba8Bytes: bytes,
+            width: width,
+            height: height,
+            bytesPerRow: bytesPerRow,
+            pixelFormat: pixelFormat,
+            device: device,
+            mipmapped: mipmapped,
+            alphaIsCoverage: alphaIsCoverage,
+            blockCompress: sRGB && blockCompress
+        ) else {
+            throw GLTFError.invalidImageData(
+                textureIndex: -1,
+                reason: "Failed to upload RGBA8 texture '\(name ?? "unnamed")' (\(width)x\(height), \(bytes.count) bytes)",
+                filePath: nil
+            )
+        }
+        let texture = VRMTexture(name: name, mtlTexture: mtlTexture)
+        texture.sampler = sampler
+        return texture
+    }
 }
 
 // MARK: - VRM Material
@@ -1752,6 +1898,13 @@ public class VRMMaterial: @unchecked Sendable {
 
     /// Optional MToon shading parameters; non-nil for materials with the `VRMC_materials_mtoon` extension.
     public var mtoon: VRMMToonMaterial?
+
+    /// Borrows `mtoon` in place without copying the `VRMMToonMaterial` struct or retaining its textures.
+    @inline(__always)
+    internal func withMToon<R>(_ body: (borrowing VRMMToonMaterial) throws -> R) rethrows -> R? {
+        guard mtoon != nil else { return nil }
+        return try body(mtoon!)
+    }
 
     /// Spec version the material was authored against. VRM 0.x MToon parameters
     /// are converted to VRM 1.0 ramp space before shading; this flag remains

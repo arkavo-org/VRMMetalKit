@@ -1167,8 +1167,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
     }
 
-    // RENDER ITEM: Structure for sorting and rendering primitives
-    private struct RenderItem {
+    // RENDER ITEM: Reference-counted item for sorting and rendering primitives without
+    // per-frame multi-field value-witness copies or ARC refcount churn during traversal/sort.
+    private final class RenderItem {
         let content: any VRMSceneContent
         let attachment: VRMAttachmentInstance?
         let node: VRMNode
@@ -1204,6 +1205,58 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         // Per-mesh primitive index for morph buffer lookup (matches compute pass key)
         let primIdxInMesh: Int
+
+        init(
+            content: any VRMSceneContent,
+            attachment: VRMAttachmentInstance?,
+            node: VRMNode,
+            mesh: VRMMesh,
+            primitive: VRMPrimitive,
+            alphaMode: String,
+            materialName: String,
+            meshIndex: Int,
+            effectiveAlphaMode: String,
+            effectiveDoubleSided: Bool,
+            effectiveAlphaCutoff: Float,
+            faceCategory: String?,
+            materialNameLower: String,
+            nodeNameLower: String,
+            meshNameLower: String,
+            isFaceMaterial: Bool,
+            isEyeMaterial: Bool,
+            isBodyMaterial: Bool,
+            effectiveAlphaModeRaw: UInt32,
+            selectedCullMode: MTLCullMode,
+            renderOrder: Int,
+            materialRenderQueue: Int,
+            primitiveIndex: Int,
+            primIdxInMesh: Int
+        ) {
+            self.content = content
+            self.attachment = attachment
+            self.node = node
+            self.mesh = mesh
+            self.primitive = primitive
+            self.alphaMode = alphaMode
+            self.materialName = materialName
+            self.meshIndex = meshIndex
+            self.effectiveAlphaMode = effectiveAlphaMode
+            self.effectiveDoubleSided = effectiveDoubleSided
+            self.effectiveAlphaCutoff = effectiveAlphaCutoff
+            self.faceCategory = faceCategory
+            self.materialNameLower = materialNameLower
+            self.nodeNameLower = nodeNameLower
+            self.meshNameLower = meshNameLower
+            self.isFaceMaterial = isFaceMaterial
+            self.isEyeMaterial = isEyeMaterial
+            self.isBodyMaterial = isBodyMaterial
+            self.effectiveAlphaModeRaw = effectiveAlphaModeRaw
+            self.selectedCullMode = selectedCullMode
+            self.renderOrder = renderOrder
+            self.materialRenderQueue = materialRenderQueue
+            self.primitiveIndex = primitiveIndex
+            self.primIdxInMesh = primIdxInMesh
+        }
     }
 
     /// Get current performance metrics
@@ -2949,7 +3002,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         var lastHasMorphedFlag: UInt32? = nil
 
         refreshHairHighlightMaterials(model: model)
-        for (index, item) in itemsToRender.enumerated() {
+        for index in 0..<itemsToRender.count {
+            let item = itemsToRender[index]
             if item.attachment?.isHidden == true || item.primitive.isHidden || item.node.isEffectivelyHidden {
                 continue
             }
@@ -3540,8 +3594,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 }
 
                 if let material = drawMaterial {
-                    if let mtoon = material.mtoon {
-                        mtoonUniforms = baseMToonUniforms(material: material, mtoon: mtoon)
+                    if let baseUniforms = material.withMToon({ mtoon in
+                        baseMToonUniforms(material: material, mtoon: mtoon)
+                    }) {
+                        mtoonUniforms = baseUniforms
                         mtoonUniforms.time = drawUVAnimationTime
                         mtoonUniforms.baseColorFactor = material.baseColorFactor // Keep base color from PBR
                         mtoonUniforms.normalScale = material.normalScale
@@ -3604,19 +3660,21 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         index: 0)
 
                     // Index 0: Base color texture
-                    if let texture = material.baseColorTexture,
-                       let mtlTexture = texture.mtlTexture {
+                    let baseColorMTL = material.baseColorTexture?.mtlTexture
+                    if let mtlTexture = baseColorMTL {
                         encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 0)
                         mtoonUniforms.hasBaseColorTexture = 1
                         textureCount += 1
                         performanceTracker?.recordStateChange(type: .texture)
                     }
 
-                    // Index 1: Shade multiply texture (direct VRMTexture reference)
-                    if let mtoon = material.mtoon {
+                    // Single borrow of `material.mtoon` for all MToon texture slots (1, 2, 5, 6, 7)
+                    // avoids repeated value copies and ARC retain/release churn on its 7 texture refs.
+                    material.withMToon { mtoon in
+                        // Index 1: Shade multiply texture (direct VRMTexture reference)
                         if let shadeTex = mtoon.shadeMultiplyTexture,
                            let mtlTexture = shadeTex.mtlTexture {
-                            let isSameAsBaseColor = material.baseColorTexture?.mtlTexture === mtlTexture
+                            let isSameAsBaseColor = baseColorMTL === mtlTexture
                                 && MToonMaterialUniforms.textureTransformRows(mtoon.textureTransform)
                                     == MToonMaterialUniforms.textureTransformRows(mtoon.shadeMultiplyTextureTransform)
                             if isSameAsBaseColor {
@@ -3634,16 +3692,36 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                             mtoonUniforms.hasShadeMultiplyTexture = 0
                             mtoonUniforms.shadeUsesBaseColor = 0
                         }
-                    }
 
-                    // Index 2: Shading shift texture
-                    if let mtoon = material.mtoon,
-                       let shadingShift = mtoon.shadingShiftTexture,
-                       let mtlTexture = shadingShift.texture.mtlTexture {
-                        encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 2)
-                        mtoonUniforms.hasShadingShiftTexture = 1
-                        mtoonUniforms.shadingShiftTextureScale = shadingShift.scale ?? 1.0
-                        textureCount += 1
+                        // Index 2: Shading shift texture
+                        if let shadingShift = mtoon.shadingShiftTexture,
+                           let mtlTexture = shadingShift.texture.mtlTexture {
+                            encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 2)
+                            mtoonUniforms.hasShadingShiftTexture = 1
+                            mtoonUniforms.shadingShiftTextureScale = shadingShift.scale ?? 1.0
+                            textureCount += 1
+                        }
+
+                        // Index 5: Matcap texture
+                        if let mtlTexture = mtoon.matcapTexture?.mtlTexture {
+                            encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 5)
+                            mtoonUniforms.hasMatcapTexture = 1
+                            textureCount += 1
+                        }
+
+                        // Index 6: Rim multiply texture
+                        if let mtlTexture = mtoon.rimMultiplyTexture?.mtlTexture {
+                            encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 6)
+                            mtoonUniforms.hasRimMultiplyTexture = 1
+                            textureCount += 1
+                        }
+
+                        // Index 7: UV animation mask texture
+                        if let mtlTexture = mtoon.uvAnimationMaskTexture?.mtlTexture {
+                            encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 7)
+                            mtoonUniforms.hasUvAnimationMaskTexture = 1
+                            textureCount += 1
+                        }
                     }
 
                     // Index 3: Normal texture
@@ -3661,30 +3739,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         mtoonUniforms.hasEmissiveTexture = 1
                         (mtoonUniforms.emissiveUvRow0, mtoonUniforms.emissiveUvRow1) =
                             MToonMaterialUniforms.textureTransformRows(material.emissiveTextureTransform)
-                        textureCount += 1
-                    }
-
-                    // Index 5: Matcap texture
-                    if let mtoon = material.mtoon,
-                       let mtlTexture = mtoon.matcapTexture?.mtlTexture {
-                        encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 5)
-                        mtoonUniforms.hasMatcapTexture = 1
-                        textureCount += 1
-                    }
-
-                    // Index 6: Rim multiply texture
-                    if let mtoon = material.mtoon,
-                       let mtlTexture = mtoon.rimMultiplyTexture?.mtlTexture {
-                        encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 6)
-                        mtoonUniforms.hasRimMultiplyTexture = 1
-                        textureCount += 1
-                    }
-
-                    // Index 7: UV animation mask texture
-                    if let mtoon = material.mtoon,
-                       let mtlTexture = mtoon.uvAnimationMaskTexture?.mtlTexture {
-                        encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 7)
-                        mtoonUniforms.hasUvAnimationMaskTexture = 1
                         textureCount += 1
                     }
 
@@ -4077,13 +4131,16 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                 }
 
-                let mergeOutline = MToonOutlineDraw.shouldMerge(
-                    globalOutlineWidth: effectiveOutlineWidthScale,
-                    mtoon: drawMaterial?.mtoon,
-                    isDoubleSided: isDoubleSided)
+                let mergeOutline: Bool = drawMaterial?.withMToon { mtoon in
+                    MToonOutlineDraw.shouldMerge(
+                        globalOutlineWidth: effectiveOutlineWidthScale,
+                        outlineWidthMode: mtoon.outlineWidthMode,
+                        outlineWidthFactor: mtoon.outlineWidthFactor,
+                        isDoubleSided: isDoubleSided)
+                } ?? false
                 bindOutlineWidthVertexTexture(
                     encoder: encoder,
-                    mtoon: drawMaterial?.mtoon,
+                    material: drawMaterial,
                     model: model)
 
                 // Set MToon material uniforms
@@ -4466,6 +4523,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             encoder: encoder,
             renderItems: allItems,
             model: model,
+            uniformsBuffer: uniformsBuffer,
+            uniformOffset: uniformOffset,
             frustum: frameFrustum,
             inflatedModelMin: inflatedModelMin,
             inflatedModelMax: inflatedModelMax,
@@ -4865,16 +4924,21 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
     private func bindOutlineWidthVertexTexture(
         encoder: MTLRenderCommandEncoder,
-        mtoon: VRMMToonMaterial?,
+        material: VRMMaterial?,
         model: VRMModel
     ) {
-        let texture: MTLTexture?
-        let sampler: MTLSamplerState?
-        if let outlineTex = mtoon?.outlineWidthMultiplyTexture,
-           let mtlTexture = outlineTex.mtlTexture {
-            texture = mtlTexture
-            sampler = outlineTex.sampler ?? samplerStates["default"]
-        } else {
+        var texture: MTLTexture?
+        var sampler: MTLSamplerState?
+        var animationMask: MTLTexture?
+        material?.withMToon { mtoon in
+            if let outlineTex = mtoon.outlineWidthMultiplyTexture,
+               let mtlTexture = outlineTex.mtlTexture {
+                texture = mtlTexture
+                sampler = outlineTex.sampler ?? samplerStates["default"]
+            }
+            animationMask = mtoon.uvAnimationMaskTexture?.mtlTexture
+        }
+        if texture == nil {
             texture = outlineWidthFallbackTexture ?? makeOutlineWidthFallbackTexture()
             sampler = samplerStates["default"]
         }
@@ -4883,7 +4947,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         // The hull animates the width mask's UVs, scaled by the UV animation
         // mask, so the vertex stage needs that texture too.
-        let animationMask: MTLTexture? = mtoon?.uvAnimationMaskTexture?.mtlTexture
         encoderStateCache.setVertexTexture(encoder, animationMask ?? outlineWidthFallbackTexture ?? makeOutlineWidthFallbackTexture(), index: 1)
     }
 
@@ -5000,7 +5063,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         hairHighlightMaterialsKey = (key, topoRev, hair)
     }
 
-    private func baseMToonUniforms(material: VRMMaterial, mtoon: VRMMToonMaterial) -> MToonMaterialUniforms {
+    private func baseMToonUniforms(material: VRMMaterial, mtoon: borrowing VRMMToonMaterial) -> MToonMaterialUniforms {
         let id = ObjectIdentifier(material)
         if let cached = baseMToonUniformsByMaterial[id] { return cached }
         let uniforms = MToonMaterialUniforms(from: mtoon)
@@ -5012,6 +5075,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         encoder: MTLRenderCommandEncoder,
         renderItems: [RenderItem],
         model: VRMModel,
+        uniformsBuffer: MTLBuffer,
+        uniformOffset: Int,
         frustum: Frustum,
         inflatedModelMin: SIMD3<Float>,
         inflatedModelMax: SIMD3<Float>,
@@ -5042,7 +5107,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         var outlinesRendered = 0
 
-        for item in renderItems {
+        for i in 0..<renderItems.count {
+            let item = renderItems[i]
             let primitive = item.primitive
             if item.attachment?.isHidden == true || primitive.isHidden || item.node.isEffectivelyHidden {
                 continue
@@ -5058,21 +5124,20 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
             let material = contentMaterials[materialIndex]
 
-            // Skip if no MToon data or outline disabled
-            guard let mtoon = material.mtoon,
-                  mtoon.outlineWidthMode != .none,
-                  mtoon.outlineWidthFactor > 0.0001 else {
-                continue
-            }
-
-            // The color pass owns this primitive's hull: it encodes the hull as
-            // its own draw right after the color draw, or — in a frame using
-            // the debug fragment, which has no outline branch — deliberately
-            // encodes no hull at all. Either way this pass must not add one.
-            if MToonOutlineDraw.shouldMerge(
-                globalOutlineWidth: effectiveOutlineWidthScale,
-                mtoon: mtoon,
-                isDoubleSided: item.effectiveDoubleSided) {
+            // Skip if no MToon data, outline disabled, or merged into the color pass
+            // (borrows `material.mtoon` in place with zero struct copies).
+            let shouldDrawDedicatedOutline: Bool = material.withMToon { mtoon in
+                guard mtoon.outlineWidthMode != .none,
+                      mtoon.outlineWidthFactor > 0.0001 else {
+                    return false
+                }
+                return !MToonOutlineDraw.shouldMerge(
+                    globalOutlineWidth: effectiveOutlineWidthScale,
+                    outlineWidthMode: mtoon.outlineWidthMode,
+                    outlineWidthFactor: mtoon.outlineWidthFactor,
+                    isDoubleSided: item.effectiveDoubleSided)
+            } ?? false
+            guard shouldDrawDedicatedOutline else {
                 continue
             }
 
@@ -5177,18 +5242,21 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // outlines at the origin (regression #185).  VRM 0.0 → 1.0
             // conversion is applied at load time, so no per-frame Y rotation
             // is needed here.
-            let outlineRotation = matrix_identity_float4x4
             if isSkinned {
-                uniforms.modelMatrix = outlineRotation
-                uniforms.normalMatrix = outlineRotation
+                encoderStateCache.setVertexBuffer(encoder, uniformsBuffer, offset: uniformOffset, index: ResourceIndices.uniformsBuffer)
             } else {
-                uniforms.modelMatrix = simd_mul(outlineRotation, item.node.worldMatrix)
+                uniforms.modelMatrix = item.node.worldMatrix
                 uniforms.normalMatrix = item.node.normalMatrix
+                encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: ResourceIndices.uniformsBuffer)
+                encoderStateCache.invalidateVertexBuffer(index: ResourceIndices.uniformsBuffer)
             }
-            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: ResourceIndices.uniformsBuffer)
 
-            // Set MToon material uniforms
-            var mtoonUniforms = baseMToonUniforms(material: material, mtoon: mtoon)
+            // Set MToon material uniforms (borrowing `material.mtoon` in place)
+            guard var mtoonUniforms = material.withMToon({ mtoon in
+                baseMToonUniforms(material: material, mtoon: mtoon)
+            }) else {
+                continue
+            }
             mtoonUniforms.baseColorFactor = material.baseColorFactor
             // Preserve source version for shader paths that truly differ
             // by VRM version (0 = VRM 0.x, 1 = VRM 1.0).
@@ -5224,7 +5292,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // slot, so this always binds — the shared helper substitutes a white
             // fallback texture when the material authors none, rather than
             // leaving the slot unbound.
-            bindOutlineWidthVertexTexture(encoder: encoder, mtoon: mtoon, model: model)
+            bindOutlineWidthVertexTexture(encoder: encoder, material: material, model: model)
 
             // Set joint matrices for skinned meshes
             if isSkinned, let skinIndex = item.node.skin, skinIndex >= 0, skinIndex < contentSkins.count {
