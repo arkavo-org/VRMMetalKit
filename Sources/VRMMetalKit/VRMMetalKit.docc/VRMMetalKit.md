@@ -138,14 +138,12 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 - ``VRMAnimationLoader``
 - ``AnimationLibrary``
 - ``VRMSkinningSystem``
-- ``SkinnedShader``
 - ``VRMAnimationState``
 - ``VRMAnimationState/BoneTransform``
 - ``VRMAnimationPresets``
 - ``VRMMorphTargetSystem``
 - ``VRMMorphTarget``
 - ``ActiveMorph``
-- ``MorphTargetShader``
 
 #### Animation Layers
 
@@ -194,7 +192,6 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 - ``VRMCollider``
 - ``VRMColliderGroup``
 - ``VRMColliderShape``
-- ``VRMRenderer/resetSpringBone()``
 - ``VRMRenderer/applySpringBoneForce(gravity:wind:duration:)``
 - <doc:SpringBonePhysics>
 

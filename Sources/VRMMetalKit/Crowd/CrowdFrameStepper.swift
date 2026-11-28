@@ -332,7 +332,7 @@ public final class CrowdFrameStepper {
             renderPassDescriptor.depthAttachment.loadAction = isFirst ? .clear : .load
             renderPassDescriptor.colorAttachments[0].storeAction = isLast ? .multisampleResolve : .store
             renderPassDescriptor.depthAttachment.storeAction = isLast ? .dontCare : .store
-            avatar.renderer.drawOffscreenHeadless(
+            avatar.renderer.drawOffscreen(
                 to: color, depth: depth, commandBuffer: commandBuffer, renderPassDescriptor: renderPassDescriptor)
         }
     }

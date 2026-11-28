@@ -25,17 +25,11 @@ final class MToonOutlineScaleTests: XCTestCase {
         var config = RendererConfig()
         config.colorPixelFormat = .rgba8Unorm
         let renderer = VRMRenderer(device: device, config: config)
-        XCTAssertEqual(renderer.outlineWidth, 0.02, accuracy: 0.0001)
         XCTAssertEqual(renderer.outlineScale, 1.0, accuracy: 0.0001)
         XCTAssertEqual(renderer.outlineMinimumPixels, 0.0, accuracy: 0.0001)
         XCTAssertEqual(renderer.effectiveOutlineWidthScale, 1.0, accuracy: 0.0001,
-            "Default outlineWidth + outlineScale must reproduce the authored width")
+            "Default outlineScale must reproduce the authored width")
 
-        renderer.outlineWidth = 0.08
-        XCTAssertEqual(renderer.effectiveOutlineWidthScale, 4.0, accuracy: 0.0001,
-            "Legacy outlineWidth keeps its 0.02 = 1x semantics")
-
-        renderer.outlineWidth = 0.02
         renderer.outlineScale = 4.0
         XCTAssertEqual(renderer.effectiveOutlineWidthScale, 4.0, accuracy: 0.0001,
             "outlineScale is a direct authored-width multiplier")

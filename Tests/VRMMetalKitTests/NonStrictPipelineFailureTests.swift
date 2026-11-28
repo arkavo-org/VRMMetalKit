@@ -93,7 +93,7 @@ final class NonStrictPipelineFailureTests: XCTestCase {
             guard let commandBuffer = queue.makeCommandBuffer() else {
                 throw XCTSkip("command buffer allocation failed")
             }
-            renderer.drawOffscreenHeadless(
+            renderer.drawOffscreen(
                 to: color, depth: depth,
                 commandBuffer: commandBuffer, renderPassDescriptor: rpd)
             commandBuffer.commit()

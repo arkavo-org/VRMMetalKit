@@ -8,7 +8,7 @@ For an interactive avatar app, "deterministic" doesn't matter — what matters i
 
 ## The contract
 
-Given a ``VRMRenderer`` configured with ``RendererConfig/synchronousSpringBone`` set to `true`, repeated calls to ``VRMRenderer/drawOffscreenHeadless(to:depth:commandBuffer:renderPassDescriptor:)`` against the same input — same model state, same animation state, same camera, same lighting, same target format — produce byte-identical output, on identical hardware, in the same OS/driver build.
+Given a ``VRMRenderer`` configured with ``RendererConfig/synchronousSpringBone`` set to `true`, repeated calls to ``VRMRenderer/drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)`` against the same input — same model state, same animation state, same camera, same lighting, same target format — produce byte-identical output, on identical hardware, in the same OS/driver build.
 
 What "the same input" means concretely:
 
@@ -43,7 +43,7 @@ renderer.enableSpringBone = true
 // Camera, lighting, render target setup as usual...
 
 // Each draw is deterministic given the model + animation state above it.
-renderer.drawOffscreenHeadless(
+renderer.drawOffscreen(
     to: colorTexture,
     depth: depthTexture,
     commandBuffer: commandBuffer,

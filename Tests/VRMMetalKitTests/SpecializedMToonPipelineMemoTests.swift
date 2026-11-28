@@ -121,24 +121,32 @@ final class SpecializedMToonPipelineMemoTests: XCTestCase {
 
         let key = features()
         let rendererA = VRMRenderer(device: device, config: linear)
-        guard rendererA.specializedMToonPipelineState(isSkinned: false, features: key) != nil else {
+        guard let pLinear = rendererA.specializedMToonPipelineState(isSkinned: false, features: key) else {
             throw XCTSkip("MToon specialization unavailable on this device")
         }
 
-        // Same renderer, mutated config: the memo must not answer with the
-        // pipeline compiled for the previous render-target layout.
-        rendererA.config = srgb
-        _ = rendererA.specializedMToonPipelineState(isSkinned: false, features: key)
-        XCTAssertEqual(
-            rendererA.specializedMToonPipelines.count, 2,
-            "Changing colorPixelFormat must miss the memo, not reuse the bgra8Unorm pipeline."
+        // Distinct render-target layouts must produce distinct specialized pipelines
+        // and distinct memo keys (colorPixelFormat and sampleCount affect compilation).
+        let rendererB = VRMRenderer(device: device, config: srgb)
+        let pSRGB = rendererB.specializedMToonPipelineState(isSkinned: false, features: key)
+        XCTAssertNotNil(pSRGB)
+        XCTAssertTrue(pLinear !== pSRGB,
+            "Changing colorPixelFormat must compile a distinct pipeline, not reuse the bgra8Unorm pipeline.")
+        XCTAssertNotEqual(
+            Array(rendererA.specializedMToonPipelines.keys),
+            Array(rendererB.specializedMToonPipelines.keys),
+            "Memo keys must distinguish colorPixelFormat."
         )
 
-        rendererA.config = msaa
-        _ = rendererA.specializedMToonPipelineState(isSkinned: false, features: key)
-        XCTAssertEqual(
-            rendererA.specializedMToonPipelines.count, 3,
-            "Changing sampleCount must miss the memo — rasterSampleCount affects compilation."
+        let rendererC = VRMRenderer(device: device, config: msaa)
+        let pMSAA = rendererC.specializedMToonPipelineState(isSkinned: false, features: key)
+        XCTAssertNotNil(pMSAA)
+        XCTAssertTrue(pLinear !== pMSAA,
+            "Changing sampleCount must compile a distinct pipeline — rasterSampleCount affects compilation.")
+        XCTAssertNotEqual(
+            Array(rendererA.specializedMToonPipelines.keys),
+            Array(rendererC.specializedMToonPipelines.keys),
+            "Memo keys must distinguish sampleCount."
         )
     }
 

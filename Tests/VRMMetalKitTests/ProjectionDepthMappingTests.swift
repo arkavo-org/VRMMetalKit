@@ -232,7 +232,7 @@ final class ProjectionDepthMappingTests: XCTestCase {
         rpd.depthAttachment.clearDepth = 1.0
         rpd.depthAttachment.storeAction = .dontCare
 
-        renderer.drawOffscreenHeadless(to: colorTex, depth: depthTex,
+        renderer.drawOffscreen(to: colorTex, depth: depthTex,
                                        commandBuffer: cb, renderPassDescriptor: rpd)
         cb.commit()
         cb.waitUntilCompleted()

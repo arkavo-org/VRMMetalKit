@@ -41,11 +41,11 @@ final class OutlineRenderingDepthTests: XCTestCase {
 
     // MARK: - Outline Width Configuration Tests
 
-    /// Test outline width can be configured
+    /// Test outline scale can be configured
     func testOutlineWidthConfiguration() {
-        let testWidth: Float = 2.5
-        renderer.outlineWidth = testWidth
-        XCTAssertEqual(renderer.outlineWidth, testWidth, "Outline width should be configurable")
+        let testScale: Float = 2.5
+        renderer.outlineScale = testScale
+        XCTAssertEqual(renderer.outlineScale, testScale, "Outline scale should be configurable")
     }
 
     /// Test outline color can be configured

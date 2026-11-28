@@ -118,9 +118,8 @@ final class MToonLegacyGoldenTests: XCTestCase {
         config.enableMaterialization = enableMaterialization
         let renderer = VRMRenderer(device: device, config: config)
         renderer.loadModel(model)
-        renderer.disableLegacyAnimation = true
         if scene != .defaults {
-            renderer.outlineWidth = 40
+            renderer.outlineScale = 2000
         }
         renderer.setLight(0, direction: SIMD3<Float>(-0.3, -0.4, -0.9), color: SIMD3<Float>(1, 1, 1), intensity: 2.5)
         renderer.setLight(1, direction: SIMD3<Float>(0.6, -0.2, -0.5), color: SIMD3<Float>(0.6, 0.7, 1.0), intensity: 0.8)

@@ -103,7 +103,7 @@ public struct HairHighlightConfig: Equatable, Sendable {
 }
 
 /// Configuration for ``VRMRenderer`` covering pixel format, validation level, MSAA, depth bias, and debug filters.
-public struct RendererConfig {
+public struct RendererConfig: Sendable {
     /// Strict-mode validation level applied to every draw call.
     public var strict: StrictLevel = .off
 
@@ -283,16 +283,24 @@ public struct RendererConfig {
     public init(
         strict: StrictLevel = .off,
         colorPixelFormat: MTLPixelFormat = .bgra8Unorm,
+        enableMetalValidation: Bool = true,
+        checkCommandBufferErrors: Bool = true,
+        minDrawCallsPerFrame: Int = 0,
+        maxFrameLuma: Float = 0.95,
         renderFilter: RenderFilter? = nil,
         drawUntil: Int? = nil,
         drawOnlyIndex: Int? = nil,
         testIdentityPalette: Int? = nil,
         sampleCount: Int = 1,
         depthBiasScale: Float = 1.0,
+        enableDepthPrepass: Bool = false,
         alphaToCoverageForMASK: Bool = false,
         synchronousSpringBone: Bool = false,
         dualQuaternionSkinning: Bool = false,
+        enablePipelineArchive: Bool = false,
+        pipelineArchiveDirectory: URL? = nil,
         enableMToonFunctionConstants: Bool = true,
+        enableMaterialization: Bool = false,
         enableMaterialFinish: Bool = false,
         hairHighlight: HairHighlightConfig = .disabled,
         enableContactShadows: Bool = false,
@@ -304,16 +312,24 @@ public struct RendererConfig {
     ) {
         self.strict = strict
         self.colorPixelFormat = colorPixelFormat
+        self.enableMetalValidation = enableMetalValidation
+        self.checkCommandBufferErrors = checkCommandBufferErrors
+        self.minDrawCallsPerFrame = minDrawCallsPerFrame
+        self.maxFrameLuma = maxFrameLuma
         self.renderFilter = renderFilter
         self.drawUntil = drawUntil
         self.drawOnlyIndex = drawOnlyIndex
         self.testIdentityPalette = testIdentityPalette
         self.sampleCount = sampleCount
         self.depthBiasScale = depthBiasScale
+        self.enableDepthPrepass = enableDepthPrepass
         self.alphaToCoverageForMASK = alphaToCoverageForMASK
         self.synchronousSpringBone = synchronousSpringBone
         self.dualQuaternionSkinning = dualQuaternionSkinning
+        self.enablePipelineArchive = enablePipelineArchive
+        self.pipelineArchiveDirectory = pipelineArchiveDirectory
         self.enableMToonFunctionConstants = enableMToonFunctionConstants
+        self.enableMaterialization = enableMaterialization
         self.enableMaterialFinish = enableMaterialFinish
         self.hairHighlight = hairHighlight
         self.enableContactShadows = enableContactShadows
@@ -485,15 +501,13 @@ public enum StrictModeError: LocalizedError {
 /// Vertex/fragment indices, spring-bone compute kernel indices, and texture
 /// slots are namespaced by comment groups below. Changes here must be
 /// mirrored in the corresponding `.metal` shaders.
-public struct ResourceIndices {
+public struct ResourceIndices: Sendable {
     /// Vertex shader: position-only stream (`VRMPositionVertex`).
     public static let vertexBuffer = 0
     /// Vertex shader: attribute stream (`VRMAttributeVertex`).
     public static let attributeBuffer = 3
     /// Vertex shader: per-frame uniform buffer.
     public static let uniformsBuffer = 1
-    /// Vertex shader: legacy skin-data buffer; retained for backward compatibility, currently unused.
-    public static let skinDataBuffer = 2
     /// Vertex shader: morph-target weights buffer.
     public static let morphWeightsBuffer = 4
     /// Vertex shader: morph-position delta buffers (8 slots).
@@ -566,22 +580,25 @@ public struct ResourceIndices {
 
 // MARK: - Strict Mode Validator
 
-/// Validates renderer state across a frame, dispatching ``StrictModeError`` according to ``RendererConfig/strict``.
+/// Validates renderer state across a frame, dispatching ``StrictModeError`` according to ``strict``.
 public final class StrictValidator {
     private let config: RendererConfig
+    /// Active validation level (seeded from ``RendererConfig/strict`` and updatable at runtime).
+    public var strict: StrictLevel
     private var drawCallCount = 0
     private var frameErrors: [StrictModeError] = []
 
     /// Creates a validator bound to the supplied renderer configuration.
     public init(config: RendererConfig) {
         self.config = config
+        self.strict = config.strict
     }
 
     // MARK: - Error Handling
 
     /// Routes a validation failure through the configured ``StrictLevel`` (log, warn-and-collect, or throw).
     public func handle(_ error: StrictModeError) throws {
-        switch config.strict {
+        switch strict {
         case .off:
             // Log only
             vrmLog(error.localizedDescription)
@@ -609,7 +626,7 @@ public final class StrictValidator {
         }
 
         // In warn mode, report all collected errors
-        if config.strict == .warn && !frameErrors.isEmpty {
+        if strict == .warn && !frameErrors.isEmpty {
             vrmLog("⚠️ [StrictMode] Frame completed with \(frameErrors.count) errors")
         }
     }

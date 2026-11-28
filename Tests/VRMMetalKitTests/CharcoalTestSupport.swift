@@ -185,10 +185,9 @@ extension CharcoalHarness {
                 if hull == .dedicated {
                     for material in model.materials { material.doubleSided = true }
                 }
-                renderer.disableLegacyAnimation = true
-                renderer.outlineWidth = 40
+                renderer.outlineScale = 2000
                 if let minimumOutlinePixels {
-                    renderer.outlineWidth = 0.001
+                    renderer.outlineScale = 0.05
                     renderer.outlineMinimumPixels = minimumOutlinePixels
                 }
             })

@@ -125,12 +125,6 @@ public enum PerfectSyncCapability: Equatable, Sendable {
         return name.lowercased().replacingOccurrences(of: "_", with: "")
     }
 
-    /// Legacy detection method that returns only capability (for compatibility)
-    @available(*, deprecated, message: "Use detect(from:) which returns DetectionResult with nameMapping")
-    public static func detectCapabilityOnly(from model: VRMModel) -> PerfectSyncCapability {
-        return detect(from: model).capability
-    }
-
     /// Check if direct mapping should be used for a blend shape.
     ///
     /// - Parameter name: The ARKit blend shape name

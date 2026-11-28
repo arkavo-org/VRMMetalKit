@@ -561,115 +561,6 @@ public final class VRMSkinningSystem {
     }
 }
 
-// MARK: - Skinned Vertex Shader
-
-/// Reference Metal source for the skinned vertex/fragment pipeline. Used as a JIT fallback when no precompiled `.metallib` is available.
-public class SkinnedShader {
-    /// Concatenated Metal shader source covering the skinned vertex stage and two fragment variants (lit, debug).
-    public static let source = """
-    #include <metal_stdlib>
-    using namespace metal;
-
-    struct SkinnedVertex {
-        float3 position [[attribute(0)]];
-        float3 normal [[attribute(1)]];
-        float2 texCoord [[attribute(2)]];
-        float4 color [[attribute(3)]];
-        uint4 joints [[attribute(4)]];    // Changed to uint4 for proper indexing
-        float4 weights [[attribute(5)]];
-    };
-
-    struct Uniforms {
-        float4x4 modelMatrix;
-        float4x4 viewMatrix;
-        float4x4 projectionMatrix;
-        float4x4 normalMatrix;
-    };
-
-    struct VertexOut {
-        float4 position [[position]];
-        float3 worldPosition;
-        float3 worldNormal;
-        float2 texCoord;
-        float2 animatedTexCoord;  // Required by MToon fragment shader
-        float4 color;
-        float3 viewDirection;
-        float3 viewNormal;
-    };
-
-    vertex VertexOut skinned_vertex(SkinnedVertex in [[stage_in]],
-                                    constant Uniforms& uniforms [[buffer(1)]],
-                                    constant float4x4* jointMatrices [[buffer(3)]],
-                                    constant uint& jointCount [[buffer(4)]],
-                                    uint vertexID [[vertex_id]]) {
-        // Apply skinning with proper weight normalization and bounds checking
-        float4 weights = in.weights;
-        float weightSum = max(dot(weights, 1.0), 1e-6);
-        weights = weights / weightSum;  // Defensive renormalization
-
-        uint4 joints = in.joints;
-
-        // Clamp joint indices to valid range to prevent out-of-bounds access
-        joints.x = min(joints.x, jointCount - 1);
-        joints.y = min(joints.y, jointCount - 1);
-        joints.z = min(joints.z, jointCount - 1);
-        joints.w = min(joints.w, jointCount - 1);
-
-        // Use joint indices directly - they're already skin-relative
-        // The jointMatrices pointer is already offset by the encoder.setVertexBuffer call
-        float4x4 skinMatrix = jointMatrices[joints.x] * weights.x +
-                             jointMatrices[joints.y] * weights.y +
-                             jointMatrices[joints.z] * weights.z +
-                             jointMatrices[joints.w] * weights.w;
-
-        // Transform position
-        float4 skinnedPosition = skinMatrix * float4(in.position, 1.0);
-        float4 worldPosition = uniforms.modelMatrix * skinnedPosition;
-
-        // Transform normal
-        float3 skinnedNormal = (skinMatrix * float4(in.normal, 0.0)).xyz;
-        float3 worldNormal = (uniforms.normalMatrix * float4(skinnedNormal, 0.0)).xyz;
-
-        VertexOut out;
-        out.position = uniforms.projectionMatrix * uniforms.viewMatrix * worldPosition;
-        out.worldPosition = worldPosition.xyz;
-        out.worldNormal = normalize(worldNormal);
-        out.texCoord = in.texCoord;
-        out.animatedTexCoord = in.texCoord;  // No UV animation in skinned shader for now
-        out.color = in.color;
-
-        // Calculate view direction (for MToon shading)
-        float3 cameraPos = -uniforms.viewMatrix[3].xyz;
-        out.viewDirection = normalize(cameraPos - out.worldPosition);
-
-        // Transform normal to view space for MatCap
-        out.viewNormal = normalize((uniforms.viewMatrix * uniforms.normalMatrix * float4(skinnedNormal, 0.0)).xyz);
-
-        return out;
-    }
-
-    // DEBUG Fragment shader - shows skinning visualization
-    fragment float4 skinned_debug_fragment(VertexOut in [[stage_in]]) {
-        // Color based on world position for debug visualization
-        return float4(fract(in.worldPosition.x), fract(in.worldPosition.y), fract(in.worldPosition.z), 1.0);
-    }
-
-    // Fragment shader remains the same as regular rendering
-    fragment float4 skinned_fragment(VertexOut in [[stage_in]]) {
-        // Simple lit shading
-        float3 lightDir = normalize(float3(0.5, 1.0, 0.5));
-        float3 normal = normalize(in.worldNormal);
-        float NdotL = max(dot(normal, lightDir), 0.0);
-
-        float3 ambient = float3(0.3, 0.3, 0.3);
-        float3 diffuse = float3(1.0, 1.0, 1.0) * NdotL;
-        float3 color = (ambient + diffuse) * in.color.rgb;
-
-        return float4(color, in.color.a);
-    }
-    """
-}
-
 // MARK: - Animation State
 
 /// Snapshot of humanoid bone transforms at a given time, used by simple in-memory animations and ``VRMLookAtController/applyToAnimationState(_:)``.
@@ -684,7 +575,7 @@ public final class VRMAnimationState {
     public var bones: [VRMHumanoidBone: BoneTransform] = [:]
 
     /// Local TRS triplet describing a single bone's pose.
-    public struct BoneTransform {
+    public struct BoneTransform: Sendable {
         /// Local rotation; identity quaternion by default.
         public var rotation: simd_quatf = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
         /// Local translation; zero by default.

@@ -136,7 +136,7 @@ final class ZFightingTestHelper {
 
         let renderPassDescriptor = createRenderPassDescriptor()
 
-        renderer.drawOffscreenHeadless(
+        renderer.drawOffscreen(
             to: colorTexture,
             depth: depthTexture,
             commandBuffer: commandBuffer,
@@ -190,7 +190,7 @@ final class ZFightingTestHelper {
 
         let renderPassDescriptor = createRenderPassDescriptor()
 
-        renderer.drawOffscreenHeadless(
+        renderer.drawOffscreen(
             to: colorTexture,
             depth: depthTexture,
             commandBuffer: commandBuffer,

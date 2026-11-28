@@ -204,7 +204,7 @@ final class DebugVisualizationRegressionTests: XCTestCase {
         renderer.loadModel(model)
         renderer.viewMatrix = matrix_identity_float4x4
         renderer.projectionMatrix = matrix_identity_float4x4
-        renderer.outlineWidth = 0.02
+        renderer.outlineScale = 1.0
         renderer.debugUVs = debugMode
 
         let size = 32
@@ -234,7 +234,7 @@ final class DebugVisualizationRegressionTests: XCTestCase {
         rpd.depthAttachment.clearDepth = 1.0
         rpd.depthAttachment.storeAction = .dontCare
 
-        renderer.drawOffscreenHeadless(
+        renderer.drawOffscreen(
             to: colorTex, depth: depthTex, commandBuffer: cb, renderPassDescriptor: rpd)
         cb.commit()
         cb.waitUntilCompleted()

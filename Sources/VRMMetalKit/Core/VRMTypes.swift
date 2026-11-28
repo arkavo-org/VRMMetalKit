@@ -25,7 +25,7 @@ import simd
 /// VRM 0.0 (Unity left-handed) and VRM 1.0 (glTF right-handed) are both
 /// loadable; ``VRMModel`` converts 0.0 content on the fly. 1.1 is reserved
 /// for future spec additions.
-public enum VRMSpecVersion: String {
+public enum VRMSpecVersion: String, Sendable {
     /// VRM 0.0 — Unity-era left-handed format. Loaded with on-the-fly conversion to 1.0 semantics.
     case v0_0 = "0.0"
     /// VRM 1.0 — current glTF-based specification. Default target format.
@@ -257,7 +257,7 @@ public enum VRMExpressionPreset: String, CaseIterable, Sendable {
 /// — see <https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/expressions.md>.
 /// `overrideBlink`, `overrideLookAt`, and `overrideMouth` control how this
 /// expression interacts with auto-blink, look-at, and lip-sync drivers.
-public struct VRMExpression {
+public struct VRMExpression: Sendable {
     /// Custom expression name; `nil` for preset-only expressions.
     public var name: String?
     /// Preset identifier, or `nil` for pure custom expressions.
@@ -285,7 +285,7 @@ public struct VRMExpression {
 }
 
 /// A morph-target weight bound to a node/mesh by an expression. Mirrors VRM 1.0 `expression.morphTargetBinds`.
-public struct VRMMorphTargetBind {
+public struct VRMMorphTargetBind: Sendable {
     /// Authored binding index as it appears in the source file: a glTF **node**
     /// index for VRM 1.0, a **mesh** index for VRM 0.x. Preserved verbatim so
     /// serialization round-trips the original value.
@@ -311,7 +311,7 @@ public struct VRMMorphTargetBind {
 }
 
 /// A material-color override bound to a material by an expression. Mirrors VRM 1.0 `expression.materialColorBinds`.
-public struct VRMMaterialColorBind {
+public struct VRMMaterialColorBind: Sendable {
     /// Material index in the glTF document.
     public var material: Int
     /// Which color channel of the material this bind targets.
@@ -328,7 +328,7 @@ public struct VRMMaterialColorBind {
 }
 
 /// Material color channels addressable by ``VRMMaterialColorBind``. Maps to VRM 1.0 expression color targets.
-public enum VRMMaterialColorType: String {
+public enum VRMMaterialColorType: String, Sendable {
     /// PBR base color / albedo.
     case color
     /// Emission color.
@@ -344,7 +344,7 @@ public enum VRMMaterialColorType: String {
 }
 
 /// A UV transform override bound to a material by an expression. Mirrors VRM 1.0 `expression.textureTransformBinds`.
-public struct VRMTextureTransformBind {
+public struct VRMTextureTransformBind: Sendable {
     /// Material index in the glTF document.
     public var material: Int
     /// UV scale override at full expression weight, or `nil` to leave unchanged.
@@ -373,7 +373,7 @@ public enum VRMExpressionOverrideType: String, Sendable {
 // MARK: - LookAt Types
 
 /// Method used to drive an avatar's eye gaze. Mirrors VRM 1.0 `lookAt.type`.
-public enum VRMLookAtType: String {
+public enum VRMLookAtType: String, Sendable {
     /// Eye gaze is driven by rotating the eye bones.
     case bone
     /// Eye gaze is driven by blending the ``VRMExpressionPreset/lookUp``, ``VRMExpressionPreset/lookDown``, ``VRMExpressionPreset/lookLeft``, and ``VRMExpressionPreset/lookRight`` expressions.
@@ -385,7 +385,7 @@ public enum VRMLookAtType: String {
 /// Defined by the VRM 1.0 look-at spec: input in `0...inputMaxValue` maps
 /// linearly to output in `0...outputScale`. Values above `inputMaxValue`
 /// are clamped to `outputScale`.
-public struct VRMLookAtRangeMap {
+public struct VRMLookAtRangeMap: Sendable {
     /// Maximum input angle in degrees beyond which the output is clamped.
     public var inputMaxValue: Float
     /// Output value reached when the input equals ``inputMaxValue``.
@@ -419,7 +419,7 @@ public enum VRMFirstPersonFlag: String, Sendable {
 /// Applications that publish, share, or transform VRM models are expected
 /// to honor these fields. Spec:
 /// <https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/meta.md>
-public struct VRMMeta {
+public struct VRMMeta: Sendable {
     /// Display title of the avatar.
     public var name: String?
     /// Avatar version string supplied by the creator.
@@ -475,7 +475,7 @@ public struct VRMMeta {
 }
 
 /// Who is permitted to wear / impersonate this avatar. Mirrors VRM 1.0 `meta.avatarPermission`.
-public enum VRMAvatarPermission: String {
+public enum VRMAvatarPermission: String, Sendable {
     /// Only the original author may use the avatar.
     case onlyAuthor
     /// Only persons separately licensed by the author may use the avatar.
@@ -485,7 +485,7 @@ public enum VRMAvatarPermission: String {
 }
 
 /// Allowed commercial-usage tier for an avatar. Mirrors VRM 1.0 `meta.commercialUsage`.
-public enum VRMCommercialUsage: String {
+public enum VRMCommercialUsage: String, Sendable {
     /// Personal, non-profit use only.
     case personalNonProfit
     /// Personal use including profit-making activity.
@@ -495,7 +495,7 @@ public enum VRMCommercialUsage: String {
 }
 
 /// Whether the avatar requires visible creator credit. Mirrors VRM 1.0 `meta.creditNotation`.
-public enum VRMCreditNotation: String {
+public enum VRMCreditNotation: String, Sendable {
     /// Users must visibly credit the creator.
     case required
     /// Crediting the creator is optional.
@@ -503,7 +503,7 @@ public enum VRMCreditNotation: String {
 }
 
 /// Whether and how the asset may be modified. Mirrors VRM 1.0 `meta.modify`.
-public enum VRMModifyPermission: String {
+public enum VRMModifyPermission: String, Sendable {
     /// Modification is forbidden.
     case prohibited
     /// Modification is allowed but redistribution of the modified asset is not.
@@ -520,7 +520,7 @@ public enum VRMModifyPermission: String {
 /// array keyed by Unity property names (`_MainTex`, `_ShadeColor`, …). Use
 /// ``toMToonMaterial()`` to convert to the VRM 1.0 ``VRMMToonMaterial``
 /// structure that the renderer consumes.
-public struct VRM0MaterialProperty {
+public struct VRM0MaterialProperty: Sendable {
     /// Material display name.
     public var name: String?
     /// Unity shader identifier (e.g. `"VRM/MToon"`).
@@ -850,7 +850,7 @@ public final class VRMMToonMaterial {
 }
 
 /// MToon shading-shift texture reference. Provides a per-pixel override on top of ``VRMMToonMaterial/shadingShiftFactor``.
-public struct VRMShadingShiftTexture {
+public struct VRMShadingShiftTexture: Sendable {
     /// Direct reference to the shading-shift texture.
     public var texture: VRMTexture
     /// Optional UV channel selector (`TEXCOORD_n`).
@@ -886,7 +886,7 @@ public enum VRMOutlineWidthMode: String, Sendable {
 /// Aggregates colliders, collider groups, and spring chains. Mirrors the
 /// VRM 1.0 `VRMC_springBone` extension. Simulation is executed on the GPU
 /// at fixed substeps; see ``VRMConstants/Physics``.
-public struct VRMSpringBone {
+public struct VRMSpringBone: Sendable {
     /// Source spec version string (e.g. `"1.0"`).
     public var specVersion: String = "1.0"
     /// All colliders referenced by this avatar.
@@ -906,7 +906,7 @@ public struct VRMSpringBone {
 }
 
 /// A collider attached to a node, used to prevent spring chains from penetrating geometry.
-public struct VRMCollider {
+public struct VRMCollider: Sendable {
     /// Node index the collider is parented to.
     public var node: Int
     /// Local-space shape and dimensions.
@@ -920,7 +920,7 @@ public struct VRMCollider {
 }
 
 /// Geometric shape of a spring-bone collider in the parent node's local frame.
-public enum VRMColliderShape {
+public enum VRMColliderShape: Sendable {
     /// Sphere collider centered at `offset` with `radius`. Joints are pushed
     /// outside this sphere.
     case sphere(offset: SIMD3<Float>, radius: Float)
@@ -942,7 +942,7 @@ public enum VRMColliderShape {
 }
 
 /// Named collection of colliders referenced by index from one or more springs.
-public struct VRMColliderGroup {
+public struct VRMColliderGroup: Sendable {
     /// Optional display name for debugging.
     public var name: String?
     /// Indices into ``VRMSpringBone/colliders``.
@@ -956,7 +956,7 @@ public struct VRMColliderGroup {
 }
 
 /// A single spring chain: an ordered list of joints with optional collider groups and a center node.
-public struct VRMSpring {
+public struct VRMSpring: Sendable {
     /// Optional display name for debugging.
     public var name: String?
     /// Joints in parent-to-child order.
@@ -973,7 +973,7 @@ public struct VRMSpring {
 }
 
 /// Per-joint parameters of a spring chain. Mirrors VRM 1.0 `VRMC_springBone.joints`.
-public struct VRMSpringJoint {
+public struct VRMSpringJoint: Sendable {
     /// Node index this joint drives.
     public var node: Int
     /// Collision radius for this joint.

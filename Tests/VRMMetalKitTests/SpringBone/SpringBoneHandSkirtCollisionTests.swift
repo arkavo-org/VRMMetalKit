@@ -1304,7 +1304,7 @@ final class SpringBoneHandSkirtCollisionTests: XCTestCase {
                 rpd.depthAttachment.loadAction = .clear
                 rpd.depthAttachment.clearDepth = 1.0
                 rpd.depthAttachment.storeAction = .dontCare
-                renderer.drawOffscreenHeadless(to: colorTex, depth: depthTex, commandBuffer: cb, renderPassDescriptor: rpd)
+                renderer.drawOffscreen(to: colorTex, depth: depthTex, commandBuffer: cb, renderPassDescriptor: rpd)
                 cb.commit()
                 while cb.status != .completed && cb.status != .error { await Task.yield() }
             }
@@ -1456,7 +1456,7 @@ final class SpringBoneHandSkirtCollisionTests: XCTestCase {
                 rpd.depthAttachment.loadAction = .clear
                 rpd.depthAttachment.clearDepth = 1.0
                 rpd.depthAttachment.storeAction = .dontCare
-                renderer.drawOffscreenHeadless(to: colorTex, depth: depthTex, commandBuffer: cb, renderPassDescriptor: rpd)
+                renderer.drawOffscreen(to: colorTex, depth: depthTex, commandBuffer: cb, renderPassDescriptor: rpd)
                 cb.commit()
                 while cb.status != .completed && cb.status != .error { await Task.yield() }
 

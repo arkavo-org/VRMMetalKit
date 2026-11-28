@@ -153,8 +153,8 @@ final class VRMLoadingOptionsTests: XCTestCase {
         // Given & When & Then
         XCTAssertEqual(VRMLoadingOptimization.skipVerboseLogging.rawValue, 1 << 0)
         XCTAssertEqual(VRMLoadingOptimization.aggressiveTextureCompression.rawValue, 1 << 1)
-        XCTAssertEqual(VRMLoadingOptimization.skipSecondaryUVs.rawValue, 1 << 2)
-        XCTAssertEqual(VRMLoadingOptimization.parallelTextureDecoding.rawValue, 1 << 3)
+        XCTAssertEqual(VRMLoadingOptimization.parallelTextureLoading.rawValue, 1 << 4)
+        XCTAssertEqual(VRMLoadingOptimization.parallelMeshLoading.rawValue, 1 << 6)
     }
     
     func testLoadingOptimizationDefault() {
@@ -163,9 +163,8 @@ final class VRMLoadingOptionsTests: XCTestCase {
         
         // Then
         XCTAssertTrue(defaultOpt.contains(.skipVerboseLogging))
-        XCTAssertTrue(defaultOpt.contains(.parallelTextureDecoding))
+        XCTAssertTrue(defaultOpt.contains(.parallelTextureLoading))
         XCTAssertFalse(defaultOpt.contains(.aggressiveTextureCompression))
-        XCTAssertFalse(defaultOpt.contains(.skipSecondaryUVs))
     }
     
     func testLoadingOptimizationMaximumPerformance() {
@@ -175,17 +174,17 @@ final class VRMLoadingOptionsTests: XCTestCase {
         // Then
         XCTAssertTrue(maxPerf.contains(.skipVerboseLogging))
         XCTAssertTrue(maxPerf.contains(.aggressiveTextureCompression))
-        XCTAssertTrue(maxPerf.contains(.skipSecondaryUVs))
-        XCTAssertTrue(maxPerf.contains(.parallelTextureDecoding))
+        XCTAssertTrue(maxPerf.contains(.parallelTextureLoading))
+        XCTAssertTrue(maxPerf.contains(.parallelMeshLoading))
     }
     
     func testLoadingOptimizationCombination() {
         // Given
-        let combined: VRMLoadingOptimization = [.skipVerboseLogging, .skipSecondaryUVs]
+        let combined: VRMLoadingOptimization = [.skipVerboseLogging, .parallelMeshLoading]
         
         // Then
         XCTAssertTrue(combined.contains(.skipVerboseLogging))
-        XCTAssertTrue(combined.contains(.skipSecondaryUVs))
+        XCTAssertTrue(combined.contains(.parallelMeshLoading))
         XCTAssertFalse(combined.contains(.aggressiveTextureCompression))
     }
     

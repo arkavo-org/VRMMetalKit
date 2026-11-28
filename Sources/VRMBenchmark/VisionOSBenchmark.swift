@@ -57,7 +57,6 @@ func runVisionOSBenchmark(
     renderer.performanceTracker = PerformanceTracker()
     renderer.useReverseZ = true
     renderer.loadModel(model)
-    renderer.outlineWidth = opts.outlineWidth
     opts.applyOutlineFeatures(to: renderer)
     renderer.enableSpringBone = opts.enableSpringBone
     renderer.skipPreDrawTransformUpdate = opts.skipPreDrawTransform

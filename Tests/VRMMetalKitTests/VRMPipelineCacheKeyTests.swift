@@ -165,7 +165,7 @@ final class VRMPipelineCacheKeyTests: XCTestCase {
         rpd.depthAttachment.clearDepth = 1.0
         rpd.depthAttachment.storeAction = .dontCare
 
-        renderer.drawOffscreenHeadless(to: colorTex, depth: depthTex, commandBuffer: cb, renderPassDescriptor: rpd)
+        renderer.drawOffscreen(to: colorTex, depth: depthTex, commandBuffer: cb, renderPassDescriptor: rpd)
         cb.commit()
         cb.waitUntilCompleted()
 

@@ -33,7 +33,7 @@ let renderer = VRMRenderer(device: device, config: config)
 
 // Optional: tighten outlines globally. Per-material widths still
 // come from VRMMToonMaterial.outlineWidthFactor.
-renderer.outlineWidth = 0.015
+renderer.outlineScale = 0.75
 ```
 
 ## Metallic and roughness finishes

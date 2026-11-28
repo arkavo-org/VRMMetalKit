@@ -87,7 +87,7 @@ extension VRMRenderer {
         // Expected Metal struct size — sourced from the canonical constant in StrictMode.
         let expectedMetalSize = MetalSizeConstants.mtoonMaterialSize
 
-        if config.strict != .off {
+        if strict != .off {
             vrmLog("[VRMRenderer] MToonMaterialUniforms alignment check:")
             vrmLog("  - Swift size: \(swiftSize) bytes")
             vrmLog("  - Swift stride: \(swiftStride) bytes")
@@ -95,10 +95,10 @@ extension VRMRenderer {
         }
 
         // In strict mode, fail if sizes don't match
-        if config.strict != .off {
+        if strict != .off {
             if swiftStride != expectedMetalSize {
                 let message = "MToonMaterialUniforms stride mismatch! Swift: \(swiftStride), Expected: \(expectedMetalSize)"
-                if config.strict == .fail {
+                if strict == .fail {
                     do {
                         try strictValidator?.handle(.uniformLayoutMismatch(swift: swiftStride, metal: expectedMetalSize, type: "MToonMaterialUniforms"))
                     } catch {
@@ -271,7 +271,7 @@ extension VRMRenderer {
             let vertexFunction = library.makeFunction(name: "mtoon_vertex")
             try strictValidator?.validateFunction(vertexFunction, name: "mtoon_vertex", type: "vertex")
             guard let vertexFunc = vertexFunction else {
-                if config.strict == .off {
+                if strict == .off {
                     vrmLog("[VRMRenderer] Failed to find mtoon_vertex function")
                     return
                 }
@@ -289,7 +289,7 @@ extension VRMRenderer {
             vrmLog("[SHADER DEBUG] Fragment function found: \(fragmentFunction != nil)")
             try strictValidator?.validateFunction(fragmentFunction, name: "mtoon_fragment_v2", type: "fragment")
             guard let fragmentFunc = fragmentFunction else {
-                if config.strict == .off {
+                if strict == .off {
                     vrmLog("[VRMRenderer] Failed to find mtoon_fragment_v2 function")
                     return
                 }
@@ -446,7 +446,7 @@ extension VRMRenderer {
             // Note: Uniforms buffers are created in setupTripleBuffering()
             // Validate uniform size in strict mode
             let uniformSize = MemoryLayout<Uniforms>.size
-            if config.strict != .off {
+            if strict != .off {
                 try strictValidator?.validateUniformSize(swift: uniformSize, metal: MetalSizeConstants.uniformsSize, type: "Uniforms")
                 // Validate all uniform buffers
                 for buffer in uniformsBuffers {
@@ -461,7 +461,7 @@ extension VRMRenderer {
                 "If the bundled shader library failed to load, rebuild the metallib slices with the release toolchain (`make shaders`). " +
                 "See https://github.com/arkavo-org/VRMMetalKit/issues/336"
             )
-            if config.strict == .fail {
+            if strict == .fail {
                 // In strict mode, propagate the error through validator
                 do {
                     try strictValidator?.handle(.pipelineCreationFailed(error.localizedDescription))
@@ -486,7 +486,7 @@ extension VRMRenderer {
             guard let skinnedVertexFunc = skinnedVertexFunction else {
                 vrmLog("[VRMRenderer] ❌ CRITICAL: Failed to find skinned_mtoon_vertex function - skinned models will not render correctly!")
                 vrmLog("[VRMRenderer] This will cause golden/corrupted rendering for skinned meshes")
-                if config.strict == .off {
+                if strict == .off {
                     return
                 }
                 throw StrictModeError.missingVertexFunction(name: "skinned_mtoon_vertex")
@@ -501,7 +501,7 @@ extension VRMRenderer {
             )
             try strictValidator?.validateFunction(fragmentFunction, name: "mtoon_fragment_v2", type: "fragment")
             guard let fragmentFunc = fragmentFunction else {
-                if config.strict == .off {
+                if strict == .off {
                     vrmLog("[VRMRenderer] Failed to find mtoon_fragment_v2 for skinned pipeline")
                     return
                 }
@@ -644,7 +644,7 @@ extension VRMRenderer {
                 "If the bundled shader library failed to load, rebuild the metallib slices with the release toolchain (`make shaders`). " +
                 "See https://github.com/arkavo-org/VRMMetalKit/issues/336"
             )
-            if config.strict == .fail {
+            if strict == .fail {
                 // In strict mode, propagate the error through validator
                 do {
                     try strictValidator?.handle(.pipelineCreationFailed(error.localizedDescription))
@@ -878,7 +878,7 @@ extension VRMRenderer {
                 "[VRMRenderer] Sprite pipeline setup failed — sprite rendering is disabled. " +
                 "Underlying error: \(error.localizedDescription)"
             )
-            if config.strict == .fail {
+            if strict == .fail {
                 // In strict mode, propagate the error through validator
                 do {
                     try strictValidator?.handle(.pipelineCreationFailed(error.localizedDescription))

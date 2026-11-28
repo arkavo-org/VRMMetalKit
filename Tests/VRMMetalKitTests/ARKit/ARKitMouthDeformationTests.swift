@@ -869,7 +869,7 @@ final class ARKitMouthDeformationTests: XCTestCase {
         rpd.depthAttachment.clearDepth = 1.0
         rpd.depthAttachment.storeAction = .dontCare
 
-        renderer.drawOffscreenHeadless(
+        renderer.drawOffscreen(
             to: colorTex, depth: depthTex, commandBuffer: cb, renderPassDescriptor: rpd
         )
         cb.commit()

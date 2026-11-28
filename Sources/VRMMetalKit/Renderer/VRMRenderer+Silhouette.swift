@@ -142,7 +142,7 @@ extension VRMRenderer {
         // Renderer flags
         self.additiveDirectionalRimEnabled = true
         self.additiveDirectionalRimPower = config.rimFresnelPower
-        self.config.hairHighlight.isEnabled = false
+        self.hairHighlight.isEnabled = false
 
         // Lighting: single warm directional rim, nothing else.
         self.disableLight(0)

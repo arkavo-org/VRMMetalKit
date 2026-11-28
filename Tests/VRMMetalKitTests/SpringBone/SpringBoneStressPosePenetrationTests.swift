@@ -165,7 +165,7 @@ final class SpringBoneStressPosePenetrationTests: XCTestCase {
             rpd.depthAttachment.loadAction = .clear
             rpd.depthAttachment.clearDepth = 1.0
             rpd.depthAttachment.storeAction = .dontCare
-            renderer.drawOffscreenHeadless(
+            renderer.drawOffscreen(
                 to: colorTex, depth: depthTex,
                 commandBuffer: cb, renderPassDescriptor: rpd)
             cb.commit()
@@ -280,7 +280,7 @@ final class SpringBoneStressPosePenetrationTests: XCTestCase {
             rpd.depthAttachment.loadAction = .clear
             rpd.depthAttachment.clearDepth = 1.0
             rpd.depthAttachment.storeAction = .dontCare
-            renderer.drawOffscreenHeadless(
+            renderer.drawOffscreen(
                 to: colorTex, depth: depthTex,
                 commandBuffer: cb, renderPassDescriptor: rpd)
             cb.commit()

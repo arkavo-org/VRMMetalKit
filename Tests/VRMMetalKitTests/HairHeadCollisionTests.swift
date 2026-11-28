@@ -105,7 +105,7 @@ final class HairHeadCollisionTests: XCTestCase {
             rpd.depthAttachment.texture = depthTex
             rpd.depthAttachment.loadAction = .clear; rpd.depthAttachment.clearDepth = 1.0
             rpd.depthAttachment.storeAction = .dontCare
-            renderer.drawOffscreenHeadless(
+            renderer.drawOffscreen(
                 to: colorTex, depth: depthTex,
                 commandBuffer: cb, renderPassDescriptor: rpd)
             cb.commit()
@@ -253,7 +253,7 @@ final class HairHeadCollisionTests: XCTestCase {
             rpd.depthAttachment.loadAction = .clear
             rpd.depthAttachment.clearDepth = 1.0
             rpd.depthAttachment.storeAction = .dontCare
-            renderer.drawOffscreenHeadless(
+            renderer.drawOffscreen(
                 to: colorTex, depth: depthTex,
                 commandBuffer: cb, renderPassDescriptor: rpd)
             cb.commit()
@@ -373,7 +373,7 @@ final class HairHeadCollisionTests: XCTestCase {
             rpd.depthAttachment.loadAction = .clear
             rpd.depthAttachment.clearDepth = 1.0
             rpd.depthAttachment.storeAction = .dontCare
-            renderer.drawOffscreenHeadless(
+            renderer.drawOffscreen(
                 to: colorTex, depth: depthTex, commandBuffer: cb, renderPassDescriptor: rpd)
             cb.commit()
             while cb.status != .completed && cb.status != .error { await Task.yield() }

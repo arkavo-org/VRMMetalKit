@@ -34,7 +34,6 @@ struct BenchmarkOptions {
     var fps: Double = 60
     var label: String = "baseline"
     var loadingPreset: String = "default"
-    var outlineWidth: Float = 0.02
     var outlineScale: Float = 1.0
     var outlineMinPixels: Float = 0
     var hairHighlight: Bool = false
@@ -197,7 +196,9 @@ func parseArguments() -> BenchmarkOptions? {
             opts.sampleCount = Int(v) ?? opts.sampleCount
         case "--outline-width":
             guard let v = nextValue(for: a) else { return nil }
-            opts.outlineWidth = Float(v) ?? opts.outlineWidth
+            if let w = Float(v), w.isFinite, w >= 0 {
+                opts.outlineScale = w / 0.02
+            }
         case "--outline-scale":
             guard let v = nextValue(for: a) else { return nil }
             guard let scale = Float(v), scale.isFinite, scale >= 0 else {
@@ -507,7 +508,6 @@ func loadingOptions(for preset: String) -> VRMLoadingOptions {
     case "safe", "parallel":
         return VRMLoadingOptions(optimizations: [
             .skipVerboseLogging,
-            .parallelTextureDecoding,
             .parallelTextureLoading,
             .parallelMeshLoading,
             .preloadBuffers,
@@ -804,7 +804,6 @@ struct VRMBenchmarkCLI {
             let r = VRMRenderer(device: device, config: config)
             if i == 0 { r.performanceTracker = PerformanceTracker() }
             r.loadModel(avatarModel)
-            r.outlineWidth = opts.outlineWidth
             opts.applyOutlineFeatures(to: r)
             r.enableSpringBone = opts.enableSpringBone
             if opts.fixedStep { r.simulationDeltaTime = 1.0 / opts.fps }
@@ -963,7 +962,7 @@ struct VRMBenchmarkCLI {
                         rpd.colorAttachments[0].loadAction = .load
                         rpd.depthAttachment.loadAction = .load
                     }
-                    avatar.renderer.drawOffscreenHeadless(
+                    avatar.renderer.drawOffscreen(
                         to: _colorTex, depth: _depthTex,
                         commandBuffer: cb, renderPassDescriptor: rpd)
                 }
@@ -1023,7 +1022,7 @@ struct VRMBenchmarkCLI {
         Animation      : \(opts.vrmaPath.map { "\(($0 as NSString).lastPathComponent) (\(String(format: "%.2f", animDurationSec))s @ \(opts.fps) fps)" } ?? "none (static pose)")
         Load time      : \(String(format: "%.1f ms", loadMs))
         Resolution     : \(opts.width)x\(opts.height) (MSAA \(opts.sampleCount)x)
-        Outline width  : \(String(format: "%.4f", opts.outlineWidth)) (scale \(opts.outlineScale), min \(opts.outlineMinPixels) px)
+        Outline scale  : \(opts.outlineScale) (min \(opts.outlineMinPixels) px)
         Material finish: \(opts.materialFinish ? "on" : "off")
         Hair highlight : \(opts.hairHighlight ? "on" : "off")
         Crease AO      : \(opts.ssao ? "on" : "off")

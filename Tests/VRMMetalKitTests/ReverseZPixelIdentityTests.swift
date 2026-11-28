@@ -16,6 +16,7 @@
 
 import XCTest
 import Metal
+import MetalKit
 import simd
 @testable import VRMMetalKit
 
@@ -222,7 +223,7 @@ final class ReverseZPixelIdentityTests: XCTestCase {
             return clip.z / clip.w
         }
 
-        let view = DummyView(size: CGSize(width: 640, height: 480))
+        let view = MTKView(frame: CGRect(x: 0, y: 0, width: 640, height: 480), device: device)
         for reverseZ in [false, true] {
             let renderer = VRMRenderer(device: device, config: config)
             renderer.useReverseZ = reverseZ
@@ -303,7 +304,7 @@ final class ReverseZPixelIdentityTests: XCTestCase {
         let renderer = VRMRenderer(device: device, config: config)
         renderer.loadModel(model)
         renderer.useReverseZ = reverseZ
-        if !outlines { renderer.outlineWidth = 0 }
+        if !outlines { renderer.outlineScale = 0 }
 
         let projection = makePerspectiveProjection(
             fovY: Float.pi / 4,
@@ -343,7 +344,7 @@ final class ReverseZPixelIdentityTests: XCTestCase {
         pass.depthAttachment.clearDepth = clearDepth
         pass.depthAttachment.storeAction = .store
 
-        renderer.drawOffscreenHeadless(
+        renderer.drawOffscreen(
             to: colorTex, depth: depthTex,
             commandBuffer: commandBuffer, renderPassDescriptor: pass)
 
