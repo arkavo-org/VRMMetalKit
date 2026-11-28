@@ -214,9 +214,7 @@ public struct RendererConfig: Sendable {
     /// instruction cost — and ``VRMRenderer/materialization`` has no visual
     /// effect. Set `true` on the `RendererConfig` value passed into
     /// ``VRMRenderer/init(device:config:)`` (same as ``sampleCount`` /
-    /// ``enablePipelineArchive``). Mutating this on a live renderer only
-    /// affects on-demand specialized variants; fallback pipelines keep the
-    /// init-time constant.
+    /// ``enablePipelineArchive``).
     public var enableMaterialization: Bool = false
 
     /// Opt-in stylized finish driven by each material's glTF
@@ -231,27 +229,28 @@ public struct RendererConfig: Sendable {
     /// pipeline that writes them deliberately).
     ///
     /// Set it, like ``hairHighlight`` and ``enableSSAO``, on the configuration
-    /// passed to ``VRMRenderer/init(device:config:)``. As with
-    /// ``enableMaterialization``, changing it on a live renderer reaches only
-    /// the function-constant-specialized pipelines; the fallback pipelines
-    /// keep the init-time choice.
+    /// passed to ``VRMRenderer/init(device:config:)`` so the surface-extension
+    /// shader code is compiled into this renderer's pipelines.
     public var enableMaterialFinish: Bool = false
 
     /// Opt-in anisotropic hair highlight. Off by default (existing models are
     /// unchanged). Stylized pipelines opt in with
-    /// `HairHighlightConfig(isEnabled: true, ...)`.
+    /// `HairHighlightConfig(isEnabled: true, ...)`. Seeds
+    /// ``VRMRenderer/hairHighlight``; enabling it at init time compiles the
+    /// surface-extension shader code into this renderer's pipelines.
     public var hairHighlight: HairHighlightConfig = .disabled
 
     /// Opt-in soft contact shadow under the model's footprint. Default `false`
     /// so model sheets keep a clean background.
     public var enableContactShadows: Bool = false
 
-    /// Opacity of the contact shadow, clamped to `0...1` when drawn. Default `0.45`.
+    /// Initial opacity of the contact shadow, clamped to `0...1` when drawn.
+    /// Default `0.45`. Seeds ``VRMRenderer/contactShadowOpacity``.
     public var contactShadowOpacity: Float = 0.45
 
-    /// Radius multiplier applied to the shadow footprint (the feet for a
+    /// Initial radius multiplier applied to the shadow footprint (the feet for a
     /// humanoid, the mesh bounds otherwise), clamped to at least `0.1`.
-    /// Default `1.15`.
+    /// Default `1.15`. Seeds ``VRMRenderer/contactShadowScale``.
     public var contactShadowScale: Float = 1.15
 
     /// Opt-in screen-space crease AO for clothing and hair creases. Default
@@ -260,8 +259,8 @@ public struct RendererConfig: Sendable {
     /// occlusion map.
     public var enableSSAO: Bool = false
 
-    /// Crease AO strength, clamped to `0...2` when used. Default `0.6`;
-    /// ignored when ``enableSSAO`` is `false`.
+    /// Initial crease AO strength, clamped to `0...2` when used. Default `0.6`;
+    /// ignored when ``enableSSAO`` is `false`. Seeds ``VRMRenderer/ssaoStrength``.
     public var ssaoStrength: Float = 0.6
 
     /// Opt-in v1 compatibility flag for legacy English material-name heuristics

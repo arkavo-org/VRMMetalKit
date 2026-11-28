@@ -93,7 +93,10 @@ final class APICleanupAndSendableTests: XCTestCase {
         let initialConfig = RendererConfig(
             strict: .off,
             depthBiasScale: 1.0,
-            hairHighlight: HairHighlightConfig(isEnabled: true)
+            hairHighlight: HairHighlightConfig(isEnabled: true),
+            contactShadowOpacity: 0.45,
+            contactShadowScale: 1.15,
+            ssaoStrength: 0.6
         )
         let renderer = VRMRenderer(device: device, config: initialConfig)
 
@@ -101,6 +104,9 @@ final class APICleanupAndSendableTests: XCTestCase {
         XCTAssertEqual(renderer.strict, .off)
         XCTAssertEqual(renderer.depthBiasScale, 1.0)
         XCTAssertTrue(renderer.hairHighlight.isEnabled)
+        XCTAssertEqual(renderer.contactShadowOpacity, 0.45)
+        XCTAssertEqual(renderer.contactShadowScale, 1.15)
+        XCTAssertEqual(renderer.ssaoStrength, 0.6)
 
         renderer.strict = .warn
         renderer.drawUntil = 5
@@ -109,6 +115,9 @@ final class APICleanupAndSendableTests: XCTestCase {
         renderer.testIdentityPalette = 0
         renderer.depthBiasScale = 3.0
         renderer.hairHighlight.isEnabled = false
+        renderer.contactShadowOpacity = 0.8
+        renderer.contactShadowScale = 1.75
+        renderer.ssaoStrength = 1.2
 
         XCTAssertEqual(renderer.strict, .warn)
         XCTAssertEqual(renderer.strictValidator?.strict, .warn)
@@ -117,10 +126,16 @@ final class APICleanupAndSendableTests: XCTestCase {
         XCTAssertEqual(renderer.testIdentityPalette, 0)
         XCTAssertEqual(renderer.depthBiasScale, 3.0)
         XCTAssertFalse(renderer.hairHighlight.isEnabled)
+        XCTAssertEqual(renderer.contactShadowOpacity, 0.8)
+        XCTAssertEqual(renderer.contactShadowScale, 1.75)
+        XCTAssertEqual(renderer.ssaoStrength, 1.2)
         // Original immutable config snapshot remains untouched
         XCTAssertEqual(renderer.config.strict, .off)
         XCTAssertEqual(renderer.config.depthBiasScale, 1.0)
         XCTAssertTrue(renderer.config.hairHighlight.isEnabled)
+        XCTAssertEqual(renderer.config.contactShadowOpacity, 0.45)
+        XCTAssertEqual(renderer.config.contactShadowScale, 1.15)
+        XCTAssertEqual(renderer.config.ssaoStrength, 0.6)
     }
 
     // MARK: - #13: Unified VRMModel.load & Swift 6 Sendable Conformance
@@ -158,7 +173,6 @@ final class APICleanupAndSendableTests: XCTestCase {
         _ = assertSendable(VRMCreditNotation.unnecessary)
         _ = assertSendable(VRMModifyPermission.allowModification)
         _ = assertSendable(VRM0MaterialProperty())
-        _ = assertSendable(VRMShadingShiftTexture(texture: VRMTexture(name: "shift")))
         _ = assertSendable(VRMSpringBone())
         _ = assertSendable(VRMCollider(node: 0, shape: .sphere(offset: .zero, radius: 0.1)))
         _ = assertSendable(VRMColliderShape.sphere(offset: .zero, radius: 0.1))
@@ -168,7 +182,6 @@ final class APICleanupAndSendableTests: XCTestCase {
         _ = assertSendable(VRMVertex())
         _ = assertSendable(VRMPositionVertex())
         _ = assertSendable(VRMAttributeVertex())
-        _ = assertSendable(VRMTexture(name: "tex"))
         _ = assertSendable(VRMMaterial.PipelineCategory.opaque)
         _ = assertSendable(VRMHumanoid.VRMHumanBone(node: 0))
         _ = assertSendable(VRMFirstPerson.VRMMeshAnnotation(node: 0, type: .auto))

@@ -84,12 +84,10 @@ import QuartzCore  // For CACurrentMediaTime
 ///
 /// ## Thread Safety
 /// Marked `@unchecked Sendable` so the renderer can be stored in `Sendable`
-/// contexts (e.g., captured by `Task`), but the encode-side methods are
-/// pinned to the main actor — ``draw(in:commandBuffer:renderPassDescriptor:)``
-/// and ``drawOffscreenHeadless(to:depth:commandBuffer:renderPassDescriptor:)``
-/// are both `@MainActor`. ``drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)``
+/// contexts (e.g., captured by `Task`), while ``draw(in:commandBuffer:renderPassDescriptor:)``
+/// is pinned to `@MainActor`. ``drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)``
 /// and ``encodeCompositorViews(commandBuffer:views:)`` are the off-thread
-/// compositor entry points.
+/// headless and compositor entry points.
 ///
 /// Whichever entry point a host picks, exactly one of them drives a given
 /// renderer instance, from one thread. They all funnel into the same
@@ -196,8 +194,26 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     }
 
     /// Runtime anisotropic hair highlight parameters (seeded from ``RendererConfig/hairHighlight``).
-    /// Note that pipeline compilation still depends on ``RendererConfig/hairHighlight`` being enabled at init time.
+    ///
+    /// - Note: Enabling hair highlights requires ``RendererConfig/hairHighlight`` (or another
+    ///   surface extension) to be enabled at init time so the surface-extension shader code is
+    ///   compiled into this renderer's MToon pipelines; otherwise runtime edits have no visual effect.
     public var hairHighlight: HairHighlightConfig
+
+    /// Runtime opacity of the ground contact shadow, clamped to `0...1` when drawn
+    /// (seeded from ``RendererConfig/contactShadowOpacity``). Takes effect when
+    /// ``RendererConfig/enableContactShadows`` is `true`.
+    public var contactShadowOpacity: Float
+
+    /// Runtime radius multiplier applied to the contact shadow footprint, clamped to at least `0.1`
+    /// (seeded from ``RendererConfig/contactShadowScale``). Takes effect when
+    /// ``RendererConfig/enableContactShadows`` is `true`.
+    public var contactShadowScale: Float
+
+    /// Runtime screen-space crease AO strength, clamped to `0...2` when drawn
+    /// (seeded from ``RendererConfig/ssaoStrength``). Takes effect when
+    /// ``RendererConfig/enableSSAO`` is `true`.
+    public var ssaoStrength: Float
 
     var strictValidator: StrictValidator?
 
@@ -1318,6 +1334,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         self.testIdentityPalette = config.testIdentityPalette
         self.depthBiasScale = config.depthBiasScale
         self.hairHighlight = config.hairHighlight
+        self.contactShadowOpacity = config.contactShadowOpacity
+        self.contactShadowScale = config.contactShadowScale
+        self.ssaoStrength = config.ssaoStrength
         self.strictValidator = StrictValidator(config: config)
         self.skinningSystem = VRMSkinningSystem(device: device)
         self.skinningSystem?.testIdentityPalette = config.testIdentityPalette
@@ -1870,15 +1889,15 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         encoderStateCache.setDepthBias(encoder, bias * sign, slopeScale: slopeScale * sign, clamp: clamp * sign)
     }
 
-    /// Thread-safe offscreen draw for render loops that don't run on the main
-    /// actor (e.g. a CompositorServices frame loop on visionOS). Identical to
-    /// ``drawOffscreenHeadless(to:depth:commandBuffer:renderPassDescriptor:)``
-    /// but passes the viewport size explicitly instead of routing it through
-    /// an `MTKView`, so it is callable from any thread.
+    /// Thread-safe offscreen draw for headless rendering and render loops that
+    /// don't run on the main actor (e.g. a CompositorServices frame loop on
+    /// visionOS). Passes the viewport size explicitly from `colorTexture`
+    /// instead of routing it through an `MTKView`, so it is callable from any
+    /// thread.
     ///
     /// The colour and depth attachments come from `renderPassDescriptor`;
-    /// `colorTexture` supplies the viewport dimensions and `depth` is accepted
-    /// for symmetry with ``drawOffscreenHeadless(to:depth:commandBuffer:renderPassDescriptor:)``.
+    /// `colorTexture` supplies the viewport dimensions and `depth` identifies
+    /// the companion depth target.
     ///
     /// - Important: Not reentrant. The renderer expects a single frame
     ///   producer — the in-flight ring (uniform buffers + `inflightSemaphore`)
@@ -4561,7 +4580,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         projectionMatrix: matrix_float4x4,
         viewportSize: SIMD2<Float>
     ) {
-        let opacity = config.contactShadowOpacity.isFinite ? max(0, min(config.contactShadowOpacity, 1)) : 0
+        let opacity = contactShadowOpacity.isFinite ? max(0, min(contactShadowOpacity, 1)) : 0
         guard opacity > 0,
               let pipeline = spritePipelineState,
               let vertexBuffer = spriteVertexBuffer,
@@ -4573,7 +4592,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
         contactShadowTexture = shadowTexture
 
-        let scale = config.contactShadowScale.isFinite ? max(0.1, config.contactShadowScale) : 1.15
+        let scale = contactShadowScale.isFinite ? max(0.1, contactShadowScale) : 1.15
         let radius = max(footprint.radius * scale, 0.01)
         // A small lift keeps the quad in front of an authored ground plane at
         // the model's base without visibly floating.
@@ -4969,12 +4988,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         let hairOn = hairHighlightMaterials.contains(ObjectIdentifier(material))
         uniforms.hairHighlightStrength = hairOn ? hair.resolvedStrength : 0
         uniforms.hairHighlightSharpness = hair.resolvedSharpness
-        let crease = config.ssaoStrength.isFinite ? max(0, min(config.ssaoStrength, 2)) : 0
+        let crease = ssaoStrength.isFinite ? max(0, min(ssaoStrength, 2)) : 0
         uniforms.ssaoStrength = config.enableSSAO ? crease : 0
     }
 
     /// Recomputes which materials receive the hair band when the model or
-    /// ``RendererConfig/hairHighlight`` changed, so the per-draw path does no
+    /// ``VRMRenderer/hairHighlight`` changed, so the per-draw path does no
     /// string matching.
     private func refreshHairHighlightMaterials(model: VRMModel) {
         let key = ObjectIdentifier(model)
@@ -5194,8 +5213,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // by VRM version (0 = VRM 0.x, 1 = VRM 1.0).
             mtoonUniforms.vrmVersion = material.vrmVersion == .v0_0 ? 0 : 1
 
-            // Apply the explicit scale and the legacy outlineWidth baseline as
-            // multipliers on the per-material width.
+            // Apply the global outline scale multiplier on the per-material width.
             mtoonUniforms.outlineWidthFactor *= self.effectiveOutlineWidthScale
             mtoonUniforms.outlineMinPixels = self.outlineMinimumPixels
             mtoonUniforms.time = drawUVAnimationTime

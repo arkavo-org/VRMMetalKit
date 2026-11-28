@@ -850,7 +850,7 @@ public final class VRMMToonMaterial {
 }
 
 /// MToon shading-shift texture reference. Provides a per-pixel override on top of ``VRMMToonMaterial/shadingShiftFactor``.
-public struct VRMShadingShiftTexture: Sendable {
+public struct VRMShadingShiftTexture {
     /// Direct reference to the shading-shift texture.
     public var texture: VRMTexture
     /// Optional UV channel selector (`TEXCOORD_n`).

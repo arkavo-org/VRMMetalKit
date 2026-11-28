@@ -34,6 +34,7 @@ struct BenchmarkOptions {
     var fps: Double = 60
     var label: String = "baseline"
     var loadingPreset: String = "default"
+    var outlineWidthFactor: Float = 1.0
     var outlineScale: Float = 1.0
     var outlineMinPixels: Float = 0
     var hairHighlight: Bool = false
@@ -69,9 +70,13 @@ extension BenchmarkOptions {
         config.enableContactShadows = contactShadow
     }
 
+    var effectiveOutlineScale: Float {
+        outlineWidthFactor * outlineScale
+    }
+
     /// Outline settings that live on the renderer rather than its config.
     func applyOutlineFeatures(to renderer: VRMRenderer) {
-        renderer.outlineScale = outlineScale
+        renderer.outlineScale = effectiveOutlineScale
         renderer.outlineMinimumPixels = outlineMinPixels
     }
 
@@ -83,7 +88,7 @@ extension BenchmarkOptions {
         if hairHighlight { labels.append("hairHighlight") }
         if ssao { labels.append("creaseAO") }
         if contactShadow { labels.append("contactShadow") }
-        if outlineScale != 1 { labels.append("outlineScale=\(outlineScale)") }
+        if effectiveOutlineScale != 1 { labels.append("outlineScale=\(effectiveOutlineScale)") }
         if outlineMinPixels != 0 { labels.append("outlineMinPixels=\(outlineMinPixels)") }
         return labels
     }
@@ -93,7 +98,7 @@ func usage() {
     print("""
     Usage: VRMBenchmark <path-to-vrm> [options]
 
-    Runs N frames of drawOffscreenHeadless against a VRM model and reports
+    Runs N frames of drawOffscreen against a VRM model and reports
     CPU frame-time percentiles plus renderer counters.
 
     Options:
@@ -196,9 +201,11 @@ func parseArguments() -> BenchmarkOptions? {
             opts.sampleCount = Int(v) ?? opts.sampleCount
         case "--outline-width":
             guard let v = nextValue(for: a) else { return nil }
-            if let w = Float(v), w.isFinite, w >= 0 {
-                opts.outlineScale = w / 0.02
+            guard let w = Float(v), w.isFinite, w >= 0 else {
+                print("ERROR: --outline-width expects a non-negative number, got '\(v)'")
+                return nil
             }
+            opts.outlineWidthFactor = w / 0.02
         case "--outline-scale":
             guard let v = nextValue(for: a) else { return nil }
             guard let scale = Float(v), scale.isFinite, scale >= 0 else {
@@ -1022,7 +1029,7 @@ struct VRMBenchmarkCLI {
         Animation      : \(opts.vrmaPath.map { "\(($0 as NSString).lastPathComponent) (\(String(format: "%.2f", animDurationSec))s @ \(opts.fps) fps)" } ?? "none (static pose)")
         Load time      : \(String(format: "%.1f ms", loadMs))
         Resolution     : \(opts.width)x\(opts.height) (MSAA \(opts.sampleCount)x)
-        Outline scale  : \(opts.outlineScale) (min \(opts.outlineMinPixels) px)
+        Outline scale  : \(opts.effectiveOutlineScale) (min \(opts.outlineMinPixels) px)
         Material finish: \(opts.materialFinish ? "on" : "off")
         Hair highlight : \(opts.hairHighlight ? "on" : "off")
         Crease AO      : \(opts.ssao ? "on" : "off")
@@ -1035,7 +1042,7 @@ struct VRMBenchmarkCLI {
         Measured frames: \(opts.frames)
         Total wall time: \(String(format: "%.1f ms", wallMs))
 
-        Per-frame CPU time (drawOffscreenHeadless + commit + wait)
+        Per-frame CPU time (drawOffscreen + commit + wait)
         ----------------------------------------------------------------------
           min    : \(String(format: "%7.3f ms", stats.minMs))
           median : \(String(format: "%7.3f ms", stats.medianMs))
@@ -1062,7 +1069,7 @@ struct VRMBenchmarkCLI {
         printCompactStats(label: "encode", samples: samples.map(\.encodeMs))
         printCompactStats(label: "gpu wait", samples: samples.map(\.waitMs))
 
-        // Sub-phase CPU breakdown captured inside drawOffscreenHeadless by the
+        // Sub-phase CPU breakdown captured inside drawOffscreen by the
         // PerformanceTracker. These attribute the `encode` span to morph setup,
         // spring-bone dispatch, render-item build, and command encoding. A phase
         // with no samples (e.g. spring bone when disabled) is omitted.

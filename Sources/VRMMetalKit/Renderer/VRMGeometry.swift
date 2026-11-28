@@ -1722,7 +1722,7 @@ public final class VRMSkin {
 ///
 /// Used by ``VRMMaterial`` to reference base color, normal, emissive,
 /// shade, matcap, rim, and outline-width-mask textures.
-public final class VRMTexture: @unchecked Sendable {
+public final class VRMTexture {
     /// Decoded GPU texture; `nil` if loading failed or was deferred.
     public var mtlTexture: MTLTexture?
     /// Sampler state resolved from the source glTF sampler — wrap mode per
