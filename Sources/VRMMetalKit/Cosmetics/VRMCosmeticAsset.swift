@@ -184,6 +184,8 @@ public final class VRMCosmeticAsset: @unchecked Sendable {
     // MARK: - Loading
 
     /// Loads a standalone `.glb` or `.vrm` cosmetic blueprint from a file URL.
+    /// Marked `@concurrent` so `@MainActor` callers execute parsing and texture decoding off the main thread.
+    @concurrent
     public static func load(
         from url: URL,
         device: MTLDevice? = nil,
@@ -203,6 +205,8 @@ public final class VRMCosmeticAsset: @unchecked Sendable {
 
     /// Loads a standalone `.glb` or `.vrm` cosmetic blueprint strictly from in-memory `Data`
     /// without writing any temporary files to disk.
+    /// Marked `@concurrent` so `@MainActor` callers execute parsing and texture decoding off the main thread.
+    @concurrent
     public static func load(
         from data: Data,
         filePath: String? = nil,
@@ -220,6 +224,7 @@ public final class VRMCosmeticAsset: @unchecked Sendable {
         )
     }
 
+    @concurrent
     private static func load(
         from data: Data,
         filePath: String?,

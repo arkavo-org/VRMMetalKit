@@ -34,7 +34,7 @@ import simd
 /// ``BufferLoader``, ``TextureLoader``, and ``VRMExtensionParser``. Application
 /// code rarely interacts with this type directly; ``VRMModel/gltf`` exposes
 /// it for advanced inspection.
-public struct GLTFDocument: Codable {
+public struct GLTFDocument: Codable, @unchecked Sendable {
     /// glTF version metadata. Mandatory per the spec.
     public let asset: GLTFAsset
     /// Index of the default scene in ``scenes``, or `nil` to leave the choice to the consumer.

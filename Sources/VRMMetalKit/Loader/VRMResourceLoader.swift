@@ -171,73 +171,99 @@ internal enum VRMResourceLoader {
         var textures: [VRMTexture] = []
         textures.reserveCapacity(textureCount)
 
+        let preloadedTextures = context?.options.preloadedTextures ?? [:]
+
         if let device = device {
             let samplerCache = GLTFSamplerCache(device: device)
             let useParallelLoading = context?.options.optimizations.contains(.parallelTextureLoading) ?? false
             let compressColorTextures = context?.options.optimizations.contains(.aggressiveTextureCompression) ?? false
 
-            if useParallelLoading && textureCount > 1 {
-                if !skipLogging {
-                    vrmLog("[VRMResourceLoader] Using parallel texture loading (\(textureCount) textures)")
-                }
-                let parallelLoader = ParallelTextureLoader(
-                    device: device,
-                    bufferLoader: bufferLoader,
-                    document: document,
-                    baseURL: baseURL,
-                    maxConcurrentLoads: min(4, textureCount)
-                )
-                parallelLoader.compressColorTextures = compressColorTextures
+            var resolvedMTLTextures: [Int: MTLTexture] = [:]
+            resolvedMTLTextures.reserveCapacity(textureCount)
+            var indicesToDecode: [Int] = []
+            indicesToDecode.reserveCapacity(textureCount)
 
-                let indices = Array(0..<textureCount)
-                let loadedTextures = try await parallelLoader.loadTexturesParallelThrowing(
-                    indices: indices,
-                    linearTextureIndices: allLinearTextureIndices
-                ) { completed, total in
-                    Task {
-                        await context?.updateProgress(
-                            itemsCompleted: completed,
-                            totalItems: total
-                        )
-                    }
-                }
-
-                var loadedCount = 0
-                for textureIndex in 0..<textureCount {
-                    let textureName = document.textures?[safe: textureIndex]?.name ?? "texture_\(textureIndex)"
-                    if let mtlTexture = loadedTextures[textureIndex] {
-                        let vrmTexture = VRMTexture(name: textureName)
-                        vrmTexture.mtlTexture = mtlTexture
-                        vrmTexture.sampler = samplerCache.samplerState(forTextureAt: textureIndex, in: document)
-                        textures.append(vrmTexture)
-                        loadedCount += 1
-                    } else {
-                        textures.append(VRMTexture(name: textureName))
-                    }
-                }
-                if !skipLogging {
-                    vrmLog("[VRMResourceLoader] ✅ Parallel texture loading complete: \(loadedCount)/\(textureCount) loaded")
-                }
-            } else {
-                let textureLoader = TextureLoader(device: device, bufferLoader: bufferLoader, document: document, baseURL: baseURL)
-                textureLoader.compressColorTextures = compressColorTextures
-                for textureIndex in 0..<textureCount {
+            for textureIndex in 0..<textureCount {
+                if let preloaded = preloadedTextures[textureIndex] {
                     try await context?.checkCancellation()
-                    await context?.updateProgress(itemsCompleted: textureIndex, totalItems: textureCount)
-
                     let isLinear = allLinearTextureIndices.contains(textureIndex)
-                    let useSRGB = !isLinear
-                    let textureName = document.textures?[safe: textureIndex]?.name ?? "texture_\(textureIndex)"
+                    let mtlTexture = try uploadPreloadedTexture(
+                        preloaded,
+                        textureIndex: textureIndex,
+                        defaultSRGB: !isLinear,
+                        compressColorTextures: compressColorTextures,
+                        document: document,
+                        device: device,
+                        baseURL: baseURL
+                    )
+                    resolvedMTLTextures[textureIndex] = mtlTexture
+                } else {
+                    indicesToDecode.append(textureIndex)
+                }
+            }
 
-                    if let mtlTexture = try await textureLoader.loadTexture(at: textureIndex, sRGB: useSRGB) {
-                        let vrmTexture = VRMTexture(name: textureName)
-                        vrmTexture.mtlTexture = mtlTexture
-                        vrmTexture.sampler = samplerCache.samplerState(forTextureAt: textureIndex, in: document)
-                        textures.append(vrmTexture)
-                    } else {
-                        textures.append(VRMTexture(name: textureName))
+            if !indicesToDecode.isEmpty {
+                if useParallelLoading && indicesToDecode.count > 1 {
+                    if !skipLogging {
+                        vrmLog("[VRMResourceLoader] Using parallel texture loading (\(indicesToDecode.count) textures)")
+                    }
+                    let parallelLoader = ParallelTextureLoader(
+                        device: device,
+                        bufferLoader: bufferLoader,
+                        document: document,
+                        baseURL: baseURL,
+                        maxConcurrentLoads: min(4, indicesToDecode.count)
+                    )
+                    parallelLoader.compressColorTextures = compressColorTextures
+
+                    let preloadedCount = textureCount - indicesToDecode.count
+                    let loadedTextures = try await parallelLoader.loadTexturesParallelThrowing(
+                        indices: indicesToDecode,
+                        linearTextureIndices: allLinearTextureIndices
+                    ) { completed, _ in
+                        Task {
+                            await context?.updateProgress(
+                                itemsCompleted: preloadedCount + completed,
+                                totalItems: textureCount
+                            )
+                        }
+                    }
+                    for (index, mtlTexture) in loadedTextures {
+                        resolvedMTLTextures[index] = mtlTexture
+                    }
+                } else {
+                    let textureLoader = TextureLoader(device: device, bufferLoader: bufferLoader, document: document, baseURL: baseURL)
+                    textureLoader.compressColorTextures = compressColorTextures
+                    for (offset, textureIndex) in indicesToDecode.enumerated() {
+                        try await context?.checkCancellation()
+                        await context?.updateProgress(
+                            itemsCompleted: (textureCount - indicesToDecode.count) + offset,
+                            totalItems: textureCount
+                        )
+
+                        let isLinear = allLinearTextureIndices.contains(textureIndex)
+                        if let mtlTexture = try await textureLoader.loadTexture(at: textureIndex, sRGB: !isLinear) {
+                            resolvedMTLTextures[textureIndex] = mtlTexture
+                        }
                     }
                 }
+            }
+
+            var loadedCount = 0
+            for textureIndex in 0..<textureCount {
+                let textureName = document.textures?[safe: textureIndex]?.name ?? "texture_\(textureIndex)"
+                if let mtlTexture = resolvedMTLTextures[textureIndex] {
+                    let vrmTexture = VRMTexture(name: textureName)
+                    vrmTexture.mtlTexture = mtlTexture
+                    vrmTexture.sampler = samplerCache.samplerState(forTextureAt: textureIndex, in: document)
+                    textures.append(vrmTexture)
+                    loadedCount += 1
+                } else {
+                    textures.append(VRMTexture(name: textureName))
+                }
+            }
+            if !skipLogging {
+                vrmLog("[VRMResourceLoader] ✅ Texture loading complete: \(loadedCount)/\(textureCount) loaded (\(preloadedTextures.count) preloaded)")
             }
         } else {
             for textureIndex in 0..<textureCount {
@@ -310,9 +336,24 @@ internal enum VRMResourceLoader {
             var linearDataTextures: [Int: VRMTexture] = [:]
             for index in sharedLinearDataIndices.sorted() {
                 try await context?.checkCancellation()
+                let mtlTexture: MTLTexture?
+                if let preloaded = preloadedTextures[index] {
+                    mtlTexture = try uploadPreloadedTexture(
+                        preloaded,
+                        textureIndex: index,
+                        defaultSRGB: false,
+                        compressColorTextures: false,
+                        document: document,
+                        device: device,
+                        baseURL: baseURL,
+                        forceLinearData: true
+                    )
+                } else {
+                    mtlTexture = try await loader.loadTexture(at: index, sRGB: false)
+                }
                 let texture = VRMTexture(
                     name: textures[safe: index]?.name,
-                    mtlTexture: try await loader.loadTexture(at: index, sRGB: false)
+                    mtlTexture: mtlTexture
                 )
                 texture.sampler = textures[safe: index]?.sampler
                 linearDataTextures[index] = texture
@@ -542,6 +583,48 @@ internal enum VRMResourceLoader {
             for i in 0..<skin.inverseBindMatrices.count {
                 skin.inverseBindMatrices[i] = ry180 * skin.inverseBindMatrices[i]
             }
+        }
+    }
+
+    private static func uploadPreloadedTexture(
+        _ preloaded: VRMPreloadedTexture,
+        textureIndex: Int,
+        defaultSRGB: Bool,
+        compressColorTextures: Bool,
+        document: GLTFDocument,
+        device: MTLDevice,
+        baseURL: URL?,
+        forceLinearData: Bool = false
+    ) throws -> MTLTexture {
+        switch preloaded.source {
+        case .mtlTexture(let existing):
+            return existing
+        case .rgba8(let data, let width, let height, let bytesPerRow):
+            let sampler = document.textures?[safe: textureIndex]?.sampler.flatMap { document.samplers?[safe: $0] }
+            let useSRGB = forceLinearData ? false : (preloaded.sRGB ?? defaultSRGB)
+            let mipmapped = preloaded.mipmapped ?? TextureLoader.samplerRequestsMipmaps(sampler)
+            let alphaIsCoverage = forceLinearData
+                ? false
+                : (preloaded.alphaIsCoverage ?? (useSRGB && TextureLoader.textureAlphaIsCoverage(textureIndex, in: document)))
+            let pixelFormat: MTLPixelFormat = useSRGB ? .rgba8Unorm_srgb : .rgba8Unorm
+            guard let texture = TextureUploader.makeTexture(
+                rgba8Data: data,
+                width: width,
+                height: height,
+                bytesPerRow: bytesPerRow,
+                pixelFormat: pixelFormat,
+                device: device,
+                mipmapped: mipmapped,
+                alphaIsCoverage: alphaIsCoverage,
+                blockCompress: useSRGB && compressColorTextures
+            ) else {
+                throw GLTFError.invalidImageData(
+                    textureIndex: textureIndex,
+                    reason: "Failed to upload preloaded RGBA8 texture (\(width)x\(height), \(data.count) bytes)",
+                    filePath: baseURL?.path
+                )
+            }
+            return texture
         }
     }
 }

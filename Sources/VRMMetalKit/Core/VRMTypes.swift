@@ -223,6 +223,32 @@ public enum VRMExpressionPreset: String, CaseIterable, Sendable {
     case neutral
     /// User-defined expression that is not covered by any preset above.
     case custom
+
+    /// Dense 0-based index matching `allCases` order for O(1) array indexing without dictionary hashing.
+    @inline(__always)
+    internal var ordinal: Int {
+        switch self {
+        case .happy: return 0
+        case .angry: return 1
+        case .sad: return 2
+        case .relaxed: return 3
+        case .surprised: return 4
+        case .aa: return 5
+        case .ih: return 6
+        case .ou: return 7
+        case .ee: return 8
+        case .oh: return 9
+        case .blink: return 10
+        case .blinkLeft: return 11
+        case .blinkRight: return 12
+        case .lookUp: return 13
+        case .lookDown: return 14
+        case .lookLeft: return 15
+        case .lookRight: return 16
+        case .neutral: return 17
+        case .custom: return 18
+        }
+    }
 }
 
 /// A single VRM expression definition combining morph, material-color, and texture-transform bindings.

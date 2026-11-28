@@ -607,16 +607,59 @@ public struct VRMMorphTarget {
 ///
 /// - Note: Future versions may use actor isolation or locks for full thread-safety.
 public class VRMExpressionController: @unchecked Sendable {
-    private var expressions: [VRMExpressionPreset: VRMExpression] = [:]
-    private var customExpressions: [String: VRMExpression] = [:]
-    private var currentWeights: [VRMExpressionPreset: Float] = [:]
-    private var customCurrentWeights: [String: Float] = [:]
+    private static let presetCount = VRMExpressionPreset.allCases.count
+    private static let blinkGroupOrdinals: [Int] = [
+        VRMExpressionPreset.blink.ordinal,
+        VRMExpressionPreset.blinkLeft.ordinal,
+        VRMExpressionPreset.blinkRight.ordinal,
+    ]
+    private static let lookAtGroupOrdinals: [Int] = [
+        VRMExpressionPreset.lookUp.ordinal,
+        VRMExpressionPreset.lookDown.ordinal,
+        VRMExpressionPreset.lookLeft.ordinal,
+        VRMExpressionPreset.lookRight.ordinal,
+    ]
+    private static let mouthGroupOrdinals: [Int] = [
+        VRMExpressionPreset.aa.ordinal,
+        VRMExpressionPreset.ih.ordinal,
+        VRMExpressionPreset.ou.ordinal,
+        VRMExpressionPreset.ee.ordinal,
+        VRMExpressionPreset.oh.ordinal,
+    ]
+
+    /// Trivial POD metadata extracted at registration time so override and isBinary
+    /// evaluation never copies `VRMExpression` or touches ARC-retained bind arrays.
+    private struct OverrideMetadata {
+        var presetOrdinal: Int  // -1 for custom or preset-less expressions
+        var customSlot: Int     // -1 for preset expressions
+        var isBinary: Bool
+        var overrideBlink: VRMExpressionOverrideType
+        var overrideLookAt: VRMExpressionOverrideType
+        var overrideMouth: VRMExpressionOverrideType
+        var hasOverrides: Bool
+    }
+
+    // Contiguous expression storage (indexed access avoids copying VRMExpression structs per frame).
+    private var presetExpressionSlots: [Int] = Array(repeating: -1, count: VRMExpressionPreset.allCases.count)
+    private var registeredPresetExpressions: [VRMExpression] = []
+    private var registeredPresetOrdinals: [Int] = []
+    private var registeredPresetMeta: [OverrideMetadata] = []
+
+    private var customIndexByName: [String: Int] = [:]
+    private var customExpressions: [VRMExpression] = []
+    private var customMeta: [OverrideMetadata] = []
+
+    // Contiguous weight storage (zero dictionary hashing/copying per frame).
+    private var presetWeights: [Float] = Array(repeating: 0, count: VRMExpressionPreset.allCases.count)
+    private var effectivePresetWeights: [Float] = Array(repeating: 0, count: VRMExpressionPreset.allCases.count)
+    private var customWeights: [Float] = []
+    private var customWeightIsSet: [Bool] = []
+
     private var morphTargetSystem: VRMMorphTargetSystem?
     private var animationTimer: Timer?
 
-    // Track morph weights per mesh
+    // Track morph weights per mesh (single authoritative table; reused across frames).
     private var meshMorphWeights: [Int: [Float]] = [:]  // meshIndex -> morph weights for that mesh
-    private var cachedMeshMorphWeights: [Int: [Float]] = [:]
     private var weightsDirty = true
     /// Reused per-mesh read buffers for ``weightsForMesh(_:morphCount:)``.
     private var weightReadScratch: [Int: [Float]] = [:]
@@ -634,12 +677,7 @@ public class VRMExpressionController: @unchecked Sendable {
     }
 
     /// Creates an empty controller with all preset weights at `0`. Attach a morph-target system via ``setMorphTargetSystem(_:)`` before rendering.
-    public init() {
-        // Initialize all preset weights to 0
-        for preset in VRMExpressionPreset.allCases {
-            currentWeights[preset] = 0
-        }
-    }
+    public init() {}
 
     deinit {
         animationTimer?.invalidate()
@@ -653,12 +691,63 @@ public class VRMExpressionController: @unchecked Sendable {
 
     /// Registers a preset expression definition (morph binds, material colour binds, override flags).
     public func registerExpression(_ expression: VRMExpression, for preset: VRMExpressionPreset) {
-        expressions[preset] = expression
+        let ordinal = preset.ordinal
+        let meta = OverrideMetadata(
+            presetOrdinal: expression.preset?.ordinal ?? -1,
+            customSlot: -1,
+            isBinary: expression.isBinary,
+            overrideBlink: expression.overrideBlink,
+            overrideLookAt: expression.overrideLookAt,
+            overrideMouth: expression.overrideMouth,
+            hasOverrides: expression.overrideBlink != .none
+                || expression.overrideLookAt != .none
+                || expression.overrideMouth != .none
+        )
+        let existingSlot = presetExpressionSlots[ordinal]
+        if existingSlot >= 0 {
+            registeredPresetExpressions[existingSlot] = expression
+            registeredPresetMeta[existingSlot] = meta
+        } else {
+            let slot = registeredPresetExpressions.count
+            presetExpressionSlots[ordinal] = slot
+            registeredPresetExpressions.append(expression)
+            registeredPresetOrdinals.append(ordinal)
+            registeredPresetMeta.append(meta)
+        }
+        weightsDirty = true
     }
 
     /// Registers a custom (non-preset) expression by name. Required before ``setCustomExpressionWeight(_:weight:)`` will apply non-zero weights.
     public func registerCustomExpression(_ expression: VRMExpression, name: String) {
-        customExpressions[name] = expression
+        let existingSlot = customIndexByName[name]
+        let slot: Int
+        if let existingSlot {
+            slot = existingSlot
+            customExpressions[slot] = expression
+        } else {
+            slot = customExpressions.count
+            customIndexByName[name] = slot
+            customExpressions.append(expression)
+            customWeights.append(0)
+            customWeightIsSet.append(false)
+        }
+        let meta = OverrideMetadata(
+            presetOrdinal: expression.preset?.ordinal ?? -1,
+            customSlot: expression.name == name ? slot : (expression.name.flatMap { customIndexByName[$0] } ?? -1),
+            isBinary: expression.isBinary,
+            overrideBlink: expression.overrideBlink,
+            overrideLookAt: expression.overrideLookAt,
+            overrideMouth: expression.overrideMouth,
+            hasOverrides: expression.overrideBlink != .none
+                || expression.overrideLookAt != .none
+                || expression.overrideMouth != .none
+        )
+        if existingSlot != nil {
+            customMeta[slot] = meta
+        } else {
+            customMeta.append(meta)
+        }
+        weightsDirty = true
     }
 
     // MARK: - Material Color Base Values
@@ -679,7 +768,7 @@ public class VRMExpressionController: @unchecked Sendable {
     public func refreshBaseMaterialColor(materialIndex: Int, from material: VRMMaterial) {
         setBaseMaterialColor(materialIndex: materialIndex, type: .color, color: material.baseColorFactor)
         setBaseMaterialColor(materialIndex: materialIndex, type: .emissionColor, color: SIMD4<Float>(material.emissiveFactor, 1.0))
-        if let mtoon = material.mtoon {
+        material.withMToon { mtoon in
             setBaseMaterialColor(materialIndex: materialIndex, type: .shadeColor, color: SIMD4<Float>(mtoon.shadeColorFactor, 1.0))
             setBaseMaterialColor(materialIndex: materialIndex, type: .matcapColor, color: SIMD4<Float>(mtoon.matcapFactor, 1.0))
             setBaseMaterialColor(materialIndex: materialIndex, type: .rimColor, color: SIMD4<Float>(mtoon.parametricRimColorFactor, 1.0))
@@ -694,7 +783,7 @@ public class VRMExpressionController: @unchecked Sendable {
         for (materialIndex, material) in model.materials.enumerated() {
             setBaseMaterialColor(materialIndex: materialIndex, type: .color, color: material.baseColorFactor)
             setBaseMaterialColor(materialIndex: materialIndex, type: .emissionColor, color: SIMD4<Float>(material.emissiveFactor, 1.0))
-            if let mtoon = material.mtoon {
+            material.withMToon { mtoon in
                 setBaseMaterialColor(materialIndex: materialIndex, type: .shadeColor, color: SIMD4<Float>(mtoon.shadeColorFactor, 1.0))
                 setBaseMaterialColor(materialIndex: materialIndex, type: .matcapColor, color: SIMD4<Float>(mtoon.matcapFactor, 1.0))
                 setBaseMaterialColor(materialIndex: materialIndex, type: .rimColor, color: SIMD4<Float>(mtoon.parametricRimColorFactor, 1.0))
@@ -719,15 +808,22 @@ public class VRMExpressionController: @unchecked Sendable {
     /// and material colour blending.
     public func setExpressionWeight(_ preset: VRMExpressionPreset, weight: Float) {
         let clampedWeight = clamp(weight, min: 0, max: 1)
-        currentWeights[preset] = clampedWeight
-        weightsDirty = true
+        let ordinal = preset.ordinal
+        if presetWeights[ordinal] != clampedWeight {
+            presetWeights[ordinal] = clampedWeight
+            weightsDirty = true
+        }
     }
 
     /// Sets the weight of a previously registered custom expression by name. No-op if `name` was not registered via ``registerCustomExpression(_:name:)``.
     public func setCustomExpressionWeight(_ name: String, weight: Float) {
-        guard customExpressions[name] != nil else { return }
-        customCurrentWeights[name] = clamp(weight, min: 0, max: 1)
-        weightsDirty = true
+        guard let slot = customIndexByName[name] else { return }
+        let clampedWeight = clamp(weight, min: 0, max: 1)
+        if !customWeightIsSet[slot] || customWeights[slot] != clampedWeight {
+            customWeights[slot] = clampedWeight
+            customWeightIsSet[slot] = true
+            weightsDirty = true
+        }
     }
 
     /// Set multiple custom expression weights at once (more efficient for Perfect Sync).
@@ -738,23 +834,33 @@ public class VRMExpressionController: @unchecked Sendable {
     ///
     /// - Parameter weights: Dictionary mapping custom expression names to weights [0-1]
     public func setCustomExpressionWeights(_ weights: [String: Float]) {
-        for (name, weight) in weights where customExpressions[name] != nil {
-            customCurrentWeights[name] = clamp(weight, min: 0, max: 1)
+        var changed = false
+        for (name, weight) in weights {
+            guard let slot = customIndexByName[name] else { continue }
+            let clampedWeight = clamp(weight, min: 0, max: 1)
+            if !customWeightIsSet[slot] || customWeights[slot] != clampedWeight {
+                customWeights[slot] = clampedWeight
+                customWeightIsSet[slot] = true
+                changed = true
+            }
         }
-        weightsDirty = true
+        if changed {
+            weightsDirty = true
+        }
     }
 
     /// Current weight of a preset expression. Returns 0 when the preset
     /// has not been set (matches the `init()` default).
     public func weight(for preset: VRMExpressionPreset) -> Float {
-        currentWeights[preset] ?? 0
+        presetWeights[preset.ordinal]
     }
 
     /// Current weight of a registered custom expression. Returns `nil`
     /// when the name has not been registered via
-    /// `registerCustomExpression(_:name:)`.
+    /// `registerCustomExpression(_:name:)` or has not been assigned a weight yet.
     public func weight(forCustom name: String) -> Float? {
-        customCurrentWeights[name]
+        guard let slot = customIndexByName[name], customWeightIsSet[slot] else { return nil }
+        return customWeights[slot]
     }
 
     // MARK: - Preset Animations
@@ -803,7 +909,7 @@ public class VRMExpressionController: @unchecked Sendable {
         // Invalidate any existing animation timer to prevent overlapping animations
         animationTimer?.invalidate()
 
-        let startWeight = currentWeights[preset] ?? 0
+        let startWeight = presetWeights[preset.ordinal]
         let startTime = CACurrentMediaTime()
 
         animationTimer = Timer.scheduledTimer(withTimeInterval: 1.0/60.0, repeats: true) { [weak self] timer in
@@ -834,33 +940,33 @@ public class VRMExpressionController: @unchecked Sendable {
         // Keep dictionary storage: this runs every dirty expression frame.
         resetMorphWeightScratch()
 
-        // Build effective weight map after isBinary quantization and group overrides.
-        // Collect all registered expressions (preset + custom) for override scanning.
-        var allExpressions: [VRMExpression] = []
-        allExpressions.reserveCapacity(expressions.count + customExpressions.count)
-        for (_, expr) in expressions { allExpressions.append(expr) }
-        for (_, expr) in customExpressions { allExpressions.append(expr) }
-
-        var effectiveWeights = currentWeights
-        applyOverridesAndBinary(weights: &effectiveWeights, expressions: allExpressions, customWeights: customCurrentWeights)
-
-        var activeCount = 0
-        for (preset, weight) in effectiveWeights where weight > 0 {
-            if let expression = expressions[preset] {
-                applyExpressionToMeshWeights(expression, weight: weight)
-                applyExpressionToMaterialColors(expression, weight: weight)
-                activeCount += 1
-            }
+        // Copy raw preset weights into pre-allocated scratch array (76 bytes, zero heap allocs).
+        for i in 0..<Self.presetCount {
+            effectivePresetWeights[i] = presetWeights[i]
         }
 
-        // Apply custom expressions with override-adjusted weights.
-        for (name, expression) in customExpressions {
-            let rawWeight = customCurrentWeights[name] ?? 0.0
+        // Apply isBinary quantization and group overrides using trivial POD metadata
+        // (zero VRMExpression copies, zero ARC retain/release traffic).
+        applyOverridesAndBinary()
+
+        var activeCount = 0
+        for slot in 0..<registeredPresetExpressions.count {
+            let ordinal = registeredPresetOrdinals[slot]
+            let weight = effectivePresetWeights[ordinal]
+            guard weight > 0 else { continue }
+            applyExpressionToMeshWeights(registeredPresetExpressions[slot], weight: weight)
+            applyExpressionToMaterialColors(registeredPresetExpressions[slot], weight: weight)
+            activeCount += 1
+        }
+
+        // Apply custom expressions with override-adjusted weights, borrowing directly from storage.
+        for slot in 0..<customExpressions.count {
+            let rawWeight = customWeights[slot]
             guard rawWeight > 0 else { continue }
-            let effectiveWeight = computeCustomEffectiveWeight(name: name, rawWeight: rawWeight)
+            let effectiveWeight = customMeta[slot].isBinary ? (rawWeight < 0.5 ? 0.0 : 1.0) : rawWeight
             if effectiveWeight > 0 {
-                applyExpressionToMeshWeights(expression, weight: effectiveWeight)
-                applyExpressionToMaterialColors(expression, weight: effectiveWeight)
+                applyExpressionToMeshWeights(customExpressions[slot], weight: effectiveWeight)
+                applyExpressionToMaterialColors(customExpressions[slot], weight: effectiveWeight)
                 activeCount += 1
             }
         }
@@ -868,13 +974,6 @@ public class VRMExpressionController: @unchecked Sendable {
         if activeCount > 0 {
             vrmLog("[VRMExpressionController] Updated morph weights for \(activeCount) active expressions across \(meshMorphWeights.keys.count) meshes")
         }
-
-        // Deep-copy final weights into the cache so reads can avoid recomputation.
-        for (meshIndex, weights) in meshMorphWeights {
-            cachedMeshMorphWeights[meshIndex] = weights
-        }
-
-        // Note: Renderer will push per-primitive weights; no global push here
     }
 
     /// Recomputes per-mesh weights only when expression weights or base material colors have changed since the last read.
@@ -889,34 +988,31 @@ public class VRMExpressionController: @unchecked Sendable {
     /// go through this so dictionary storage can be retained across frames.
     func resetMorphWeightScratch() {
         meshMorphWeights.removeAll(keepingCapacity: true)
-        cachedMeshMorphWeights.removeAll(keepingCapacity: true)
         materialColorOverrides.removeAll(keepingCapacity: true)
     }
 
     var meshMorphWeightStorageCapacity: Int { meshMorphWeights.capacity }
-    var cachedMeshMorphWeightStorageCapacity: Int { cachedMeshMorphWeights.capacity }
+    var cachedMeshMorphWeightStorageCapacity: Int { meshMorphWeights.capacity }
     var meshMorphWeightCount: Int { meshMorphWeights.count }
 
-    /// Applies isBinary quantization and expression-group override semantics in-place.
-    ///
-    /// Step 1 — isBinary: quantize each preset expression with isBinary=true.
-    /// Step 2 — compute per-group suppression factors from all expressions (preset + custom).
-    /// Step 3 — apply suppression to blink / lookAt / mouth groups.
-    private func applyOverridesAndBinary(
-        weights: inout [VRMExpressionPreset: Float],
-        expressions: [VRMExpression],
-        customWeights: [String: Float]
-    ) {
-        // Step 1: isBinary quantization for preset expressions.
-        for expr in expressions {
-            guard expr.isBinary, let preset = expr.preset else { continue }
-            if let w = weights[preset] {
-                weights[preset] = w < 0.5 ? 0.0 : 1.0
-            }
+    /// Applies isBinary quantization and expression-group override semantics in-place
+    /// on `effectivePresetWeights` using pre-extracted POD metadata.
+    private func applyOverridesAndBinary() {
+        // Step 1: isBinary quantization for preset expressions (and any custom expression with preset set).
+        for i in 0..<registeredPresetMeta.count {
+            let meta = registeredPresetMeta[i]
+            guard meta.isBinary, meta.presetOrdinal >= 0 else { continue }
+            let w = effectivePresetWeights[meta.presetOrdinal]
+            effectivePresetWeights[meta.presetOrdinal] = w < 0.5 ? 0.0 : 1.0
         }
-        // isBinary for custom expressions is handled inside computeCustomEffectiveWeight.
+        for i in 0..<customMeta.count {
+            let meta = customMeta[i]
+            guard meta.isBinary, meta.presetOrdinal >= 0 else { continue }
+            let w = effectivePresetWeights[meta.presetOrdinal]
+            effectivePresetWeights[meta.presetOrdinal] = w < 0.5 ? 0.0 : 1.0
+        }
 
-        // Step 2: Compute group suppression factors using all expression weights.
+        // Step 2: Compute group suppression factors using all active expression weights.
         var blockBlink = false
         var blockLookAt = false
         var blockMouth = false
@@ -924,31 +1020,61 @@ public class VRMExpressionController: @unchecked Sendable {
         var blendLookAt: Float = 1.0
         var blendMouth: Float = 1.0
 
-        for expr in expressions {
-            // Resolve effective weight for this expression.
+        for i in 0..<registeredPresetMeta.count {
+            let meta = registeredPresetMeta[i]
+            guard meta.hasOverrides else { continue }
             let w: Float
-            if let preset = expr.preset {
-                let raw = weights[preset] ?? 0.0
-                w = expr.isBinary ? (raw < 0.5 ? 0.0 : 1.0) : raw
-            } else if let name = expr.name {
-                let raw = customWeights[name] ?? 0.0
-                w = expr.isBinary ? (raw < 0.5 ? 0.0 : 1.0) : raw
+            if meta.presetOrdinal >= 0 {
+                let raw = effectivePresetWeights[meta.presetOrdinal]
+                w = meta.isBinary ? (raw < 0.5 ? 0.0 : 1.0) : raw
             } else {
                 continue
             }
             guard w > 0 else { continue }
 
-            switch expr.overrideBlink {
+            switch meta.overrideBlink {
             case .block: blockBlink = true
             case .blend: blendBlink *= (1.0 - w)
             case .none: break
             }
-            switch expr.overrideLookAt {
+            switch meta.overrideLookAt {
             case .block: blockLookAt = true
             case .blend: blendLookAt *= (1.0 - w)
             case .none: break
             }
-            switch expr.overrideMouth {
+            switch meta.overrideMouth {
+            case .block: blockMouth = true
+            case .blend: blendMouth *= (1.0 - w)
+            case .none: break
+            }
+        }
+
+        for i in 0..<customMeta.count {
+            let meta = customMeta[i]
+            guard meta.hasOverrides else { continue }
+            let w: Float
+            if meta.presetOrdinal >= 0 {
+                let raw = effectivePresetWeights[meta.presetOrdinal]
+                w = meta.isBinary ? (raw < 0.5 ? 0.0 : 1.0) : raw
+            } else if meta.customSlot >= 0 {
+                let raw = customWeights[meta.customSlot]
+                w = meta.isBinary ? (raw < 0.5 ? 0.0 : 1.0) : raw
+            } else {
+                continue
+            }
+            guard w > 0 else { continue }
+
+            switch meta.overrideBlink {
+            case .block: blockBlink = true
+            case .blend: blendBlink *= (1.0 - w)
+            case .none: break
+            }
+            switch meta.overrideLookAt {
+            case .block: blockLookAt = true
+            case .blend: blendLookAt *= (1.0 - w)
+            case .none: break
+            }
+            switch meta.overrideMouth {
             case .block: blockMouth = true
             case .blend: blendMouth *= (1.0 - w)
             case .none: break
@@ -956,45 +1082,29 @@ public class VRMExpressionController: @unchecked Sendable {
         }
 
         // Step 3: Apply suppression to each group. block dominates blend.
-        let blinkGroup: [VRMExpressionPreset] = [.blink, .blinkLeft, .blinkRight]
-        let lookAtGroup: [VRMExpressionPreset] = [.lookUp, .lookDown, .lookLeft, .lookRight]
-        let mouthGroup: [VRMExpressionPreset] = [.aa, .ih, .ou, .ee, .oh]
-
-        for preset in blinkGroup {
-            if blockBlink {
-                weights[preset] = 0.0
-            } else if let w = weights[preset] {
-                weights[preset] = w * blendBlink
-            }
+        if blockBlink {
+            for ordinal in Self.blinkGroupOrdinals { effectivePresetWeights[ordinal] = 0.0 }
+        } else if blendBlink < 1.0 {
+            for ordinal in Self.blinkGroupOrdinals { effectivePresetWeights[ordinal] *= blendBlink }
         }
-        for preset in lookAtGroup {
-            if blockLookAt {
-                weights[preset] = 0.0
-            } else if let w = weights[preset] {
-                weights[preset] = w * blendLookAt
-            }
+        if blockLookAt {
+            for ordinal in Self.lookAtGroupOrdinals { effectivePresetWeights[ordinal] = 0.0 }
+        } else if blendLookAt < 1.0 {
+            for ordinal in Self.lookAtGroupOrdinals { effectivePresetWeights[ordinal] *= blendLookAt }
         }
-        for preset in mouthGroup {
-            if blockMouth {
-                weights[preset] = 0.0
-            } else if let w = weights[preset] {
-                weights[preset] = w * blendMouth
-            }
+        if blockMouth {
+            for ordinal in Self.mouthGroupOrdinals { effectivePresetWeights[ordinal] = 0.0 }
+        } else if blendMouth < 1.0 {
+            for ordinal in Self.mouthGroupOrdinals { effectivePresetWeights[ordinal] *= blendMouth }
         }
-    }
-
-    /// Returns the override-adjusted effective weight for a custom expression.
-    /// Overrides applied to custom expressions affect preset groups the same way.
-    /// Custom expressions themselves are not in any group so they are never suppressed
-    /// by other expressions' overrides — only their own override field matters for groups.
-    private func computeCustomEffectiveWeight(name: String, rawWeight: Float) -> Float {
-        guard let expr = customExpressions[name] else { return rawWeight }
-        return expr.isBinary ? (rawWeight < 0.5 ? 0.0 : 1.0) : rawWeight
     }
 
     /// Applies material color binds from an expression, blending with base colors.
-    private func applyExpressionToMaterialColors(_ expression: VRMExpression, weight: Float) {
-        for bind in expression.materialColorBinds {
+    private func applyExpressionToMaterialColors(_ expression: borrowing VRMExpression, weight: Float) {
+        let count = expression.materialColorBinds.count
+        guard count > 0 else { return }
+        for i in 0..<count {
+            let bind = expression.materialColorBinds[i]
             let materialIndex = bind.material
             let colorType = bind.type
 
@@ -1020,12 +1130,15 @@ public class VRMExpressionController: @unchecked Sendable {
         return a + (b - a) * t
     }
 
-    private func applyExpressionToMeshWeights(_ expression: VRMExpression, weight: Float) {
+    private func applyExpressionToMeshWeights(_ expression: borrowing VRMExpression, weight: Float) {
         // Apply morph target binds per mesh. Reject binds whose morphIndex is
         // negative or beyond the per-mesh cap so a malicious VRM cannot grow
         // meshMorphWeights to an arbitrary size (DoS via unbounded allocation)
         // or crash the loader by indexing with a negative value.
-        for bind in expression.morphTargetBinds {
+        let count = expression.morphTargetBinds.count
+        guard count > 0 else { return }
+        for i in 0..<count {
+            let bind = expression.morphTargetBinds[i]
             // Use the resolved mesh index, not the authored `node` (a node index
             // for VRM 1.0). `meshIndex` == `node` for VRM 0.x, so both paths key
             // morph weights by mesh consistently.
@@ -1037,13 +1150,19 @@ public class VRMExpressionController: @unchecked Sendable {
                 continue
             }
 
-            // Grow weights array to accommodate morphIndex
-            var arr = meshMorphWeights[meshIndex] ?? []
-            if arr.count <= morphIndex {
-                arr.append(contentsOf: repeatElement(0.0, count: morphIndex + 1 - arr.count))
+            // Remove-modify-reinsert guarantees unique backing storage (zero CoW copies).
+            let delta = bind.weight * weight
+            if var existing = meshMorphWeights.removeValue(forKey: meshIndex) {
+                if existing.count <= morphIndex {
+                    existing.append(contentsOf: repeatElement(0.0, count: morphIndex + 1 - existing.count))
+                }
+                existing[morphIndex] += delta
+                meshMorphWeights[meshIndex] = existing
+            } else {
+                var arr = [Float](repeating: 0.0, count: morphIndex + 1)
+                arr[morphIndex] = delta
+                meshMorphWeights[meshIndex] = arr
             }
-            arr[morphIndex] += bind.weight * weight
-            meshMorphWeights[meshIndex] = arr
         }
     }
 
@@ -1054,17 +1173,19 @@ public class VRMExpressionController: @unchecked Sendable {
     public func weightsForMesh(_ meshIndex: Int, morphCount: Int) -> [Float] {
         guard morphCount > 0 else { return [] }
         ensureWeightsUpdated()
-        let source = cachedMeshMorphWeights[meshIndex] ?? []
+        let source = meshMorphWeights[meshIndex]
         // Take the scratch out so CoW does not copy on fill.
         var scratch = weightReadScratch.removeValue(forKey: meshIndex) ?? []
         if scratch.count != morphCount {
             scratch = [Float](repeating: 0, count: morphCount)
         } else {
-            for i in scratch.indices { scratch[i] = 0 }
+            for i in 0..<morphCount { scratch[i] = 0 }
         }
-        let copyCount = min(source.count, morphCount)
-        for i in 0..<copyCount {
-            scratch[i] = source[i]
+        if let source {
+            let copyCount = min(source.count, morphCount)
+            for i in 0..<copyCount {
+                scratch[i] = source[i]
+            }
         }
         weightReadScratch[meshIndex] = scratch
         return scratch
@@ -1077,9 +1198,9 @@ public class VRMExpressionController: @unchecked Sendable {
         ensureWeightsUpdated()
         if !morphFingerprintValid {
             var hasher = Hasher()
-            for key in cachedMeshMorphWeights.keys.sorted() {
+            for key in meshMorphWeights.keys.sorted() {
                 hasher.combine(key)
-                if let values = cachedMeshMorphWeights[key] {
+                if let values = meshMorphWeights[key] {
                     for value in values {
                         hasher.combine(value)
                     }
