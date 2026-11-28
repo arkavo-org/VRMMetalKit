@@ -953,7 +953,7 @@ struct VRMVideoRendererCLI {
                 renderPassDescriptor.depthAttachment.storeAction = .dontCare
 
                 // Draw to MSAA texture (resolves to resolveTexture)
-                renderer.drawOffscreenHeadless(
+                renderer.drawOffscreen(
                     to: msaaColorTexture,
                     depth: msaaDepthTexture,
                     commandBuffer: commandBuffer,

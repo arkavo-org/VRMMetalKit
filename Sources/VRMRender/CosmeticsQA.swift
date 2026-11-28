@@ -401,7 +401,7 @@ enum CosmeticsQARunner {
         guard let cb = queue.makeCommandBuffer() else {
             throw RenderError.failedToCreateCommandBuffer
         }
-        renderer.drawOffscreenHeadless(
+        renderer.drawOffscreen(
             to: colorTex,
             depth: depthTex,
             commandBuffer: cb,

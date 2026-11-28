@@ -103,7 +103,7 @@ public struct HairHighlightConfig: Equatable, Sendable {
 }
 
 /// Configuration for ``VRMRenderer`` covering pixel format, validation level, MSAA, depth bias, and debug filters.
-public struct RendererConfig {
+public struct RendererConfig: Sendable {
     /// Strict-mode validation level applied to every draw call.
     public var strict: StrictLevel = .off
 
@@ -214,9 +214,7 @@ public struct RendererConfig {
     /// instruction cost — and ``VRMRenderer/materialization`` has no visual
     /// effect. Set `true` on the `RendererConfig` value passed into
     /// ``VRMRenderer/init(device:config:)`` (same as ``sampleCount`` /
-    /// ``enablePipelineArchive``). Mutating this on a live renderer only
-    /// affects on-demand specialized variants; fallback pipelines keep the
-    /// init-time constant.
+    /// ``enablePipelineArchive``).
     public var enableMaterialization: Bool = false
 
     /// Opt-in stylized finish driven by each material's glTF
@@ -231,27 +229,28 @@ public struct RendererConfig {
     /// pipeline that writes them deliberately).
     ///
     /// Set it, like ``hairHighlight`` and ``enableSSAO``, on the configuration
-    /// passed to ``VRMRenderer/init(device:config:)``. As with
-    /// ``enableMaterialization``, changing it on a live renderer reaches only
-    /// the function-constant-specialized pipelines; the fallback pipelines
-    /// keep the init-time choice.
+    /// passed to ``VRMRenderer/init(device:config:)`` so the surface-extension
+    /// shader code is compiled into this renderer's pipelines.
     public var enableMaterialFinish: Bool = false
 
     /// Opt-in anisotropic hair highlight. Off by default (existing models are
     /// unchanged). Stylized pipelines opt in with
-    /// `HairHighlightConfig(isEnabled: true, ...)`.
+    /// `HairHighlightConfig(isEnabled: true, ...)`. Seeds
+    /// ``VRMRenderer/hairHighlight``; enabling it at init time compiles the
+    /// surface-extension shader code into this renderer's pipelines.
     public var hairHighlight: HairHighlightConfig = .disabled
 
     /// Opt-in soft contact shadow under the model's footprint. Default `false`
     /// so model sheets keep a clean background.
     public var enableContactShadows: Bool = false
 
-    /// Opacity of the contact shadow, clamped to `0...1` when drawn. Default `0.45`.
+    /// Initial opacity of the contact shadow, clamped to `0...1` when drawn.
+    /// Default `0.45`. Seeds ``VRMRenderer/contactShadowOpacity``.
     public var contactShadowOpacity: Float = 0.45
 
-    /// Radius multiplier applied to the shadow footprint (the feet for a
+    /// Initial radius multiplier applied to the shadow footprint (the feet for a
     /// humanoid, the mesh bounds otherwise), clamped to at least `0.1`.
-    /// Default `1.15`.
+    /// Default `1.15`. Seeds ``VRMRenderer/contactShadowScale``.
     public var contactShadowScale: Float = 1.15
 
     /// Opt-in screen-space crease AO for clothing and hair creases. Default
@@ -260,8 +259,8 @@ public struct RendererConfig {
     /// occlusion map.
     public var enableSSAO: Bool = false
 
-    /// Crease AO strength, clamped to `0...2` when used. Default `0.6`;
-    /// ignored when ``enableSSAO`` is `false`.
+    /// Initial crease AO strength, clamped to `0...2` when used. Default `0.6`;
+    /// ignored when ``enableSSAO`` is `false`. Seeds ``VRMRenderer/ssaoStrength``.
     public var ssaoStrength: Float = 0.6
 
     /// Opt-in v1 compatibility flag for legacy English material-name heuristics
@@ -283,16 +282,24 @@ public struct RendererConfig {
     public init(
         strict: StrictLevel = .off,
         colorPixelFormat: MTLPixelFormat = .bgra8Unorm,
+        enableMetalValidation: Bool = true,
+        checkCommandBufferErrors: Bool = true,
+        minDrawCallsPerFrame: Int = 0,
+        maxFrameLuma: Float = 0.95,
         renderFilter: RenderFilter? = nil,
         drawUntil: Int? = nil,
         drawOnlyIndex: Int? = nil,
         testIdentityPalette: Int? = nil,
         sampleCount: Int = 1,
         depthBiasScale: Float = 1.0,
+        enableDepthPrepass: Bool = false,
         alphaToCoverageForMASK: Bool = false,
         synchronousSpringBone: Bool = false,
         dualQuaternionSkinning: Bool = false,
+        enablePipelineArchive: Bool = false,
+        pipelineArchiveDirectory: URL? = nil,
         enableMToonFunctionConstants: Bool = true,
+        enableMaterialization: Bool = false,
         enableMaterialFinish: Bool = false,
         hairHighlight: HairHighlightConfig = .disabled,
         enableContactShadows: Bool = false,
@@ -304,16 +311,24 @@ public struct RendererConfig {
     ) {
         self.strict = strict
         self.colorPixelFormat = colorPixelFormat
+        self.enableMetalValidation = enableMetalValidation
+        self.checkCommandBufferErrors = checkCommandBufferErrors
+        self.minDrawCallsPerFrame = minDrawCallsPerFrame
+        self.maxFrameLuma = maxFrameLuma
         self.renderFilter = renderFilter
         self.drawUntil = drawUntil
         self.drawOnlyIndex = drawOnlyIndex
         self.testIdentityPalette = testIdentityPalette
         self.sampleCount = sampleCount
         self.depthBiasScale = depthBiasScale
+        self.enableDepthPrepass = enableDepthPrepass
         self.alphaToCoverageForMASK = alphaToCoverageForMASK
         self.synchronousSpringBone = synchronousSpringBone
         self.dualQuaternionSkinning = dualQuaternionSkinning
+        self.enablePipelineArchive = enablePipelineArchive
+        self.pipelineArchiveDirectory = pipelineArchiveDirectory
         self.enableMToonFunctionConstants = enableMToonFunctionConstants
+        self.enableMaterialization = enableMaterialization
         self.enableMaterialFinish = enableMaterialFinish
         self.hairHighlight = hairHighlight
         self.enableContactShadows = enableContactShadows
@@ -485,15 +500,13 @@ public enum StrictModeError: LocalizedError {
 /// Vertex/fragment indices, spring-bone compute kernel indices, and texture
 /// slots are namespaced by comment groups below. Changes here must be
 /// mirrored in the corresponding `.metal` shaders.
-public struct ResourceIndices {
+public struct ResourceIndices: Sendable {
     /// Vertex shader: position-only stream (`VRMPositionVertex`).
     public static let vertexBuffer = 0
     /// Vertex shader: attribute stream (`VRMAttributeVertex`).
     public static let attributeBuffer = 3
     /// Vertex shader: per-frame uniform buffer.
     public static let uniformsBuffer = 1
-    /// Vertex shader: legacy skin-data buffer; retained for backward compatibility, currently unused.
-    public static let skinDataBuffer = 2
     /// Vertex shader: morph-target weights buffer.
     public static let morphWeightsBuffer = 4
     /// Vertex shader: morph-position delta buffers (8 slots).
@@ -566,22 +579,25 @@ public struct ResourceIndices {
 
 // MARK: - Strict Mode Validator
 
-/// Validates renderer state across a frame, dispatching ``StrictModeError`` according to ``RendererConfig/strict``.
+/// Validates renderer state across a frame, dispatching ``StrictModeError`` according to ``strict``.
 public final class StrictValidator {
     private let config: RendererConfig
+    /// Active validation level (seeded from ``RendererConfig/strict`` and updatable at runtime).
+    public var strict: StrictLevel
     private var drawCallCount = 0
     private var frameErrors: [StrictModeError] = []
 
     /// Creates a validator bound to the supplied renderer configuration.
     public init(config: RendererConfig) {
         self.config = config
+        self.strict = config.strict
     }
 
     // MARK: - Error Handling
 
     /// Routes a validation failure through the configured ``StrictLevel`` (log, warn-and-collect, or throw).
     public func handle(_ error: StrictModeError) throws {
-        switch config.strict {
+        switch strict {
         case .off:
             // Log only
             vrmLog(error.localizedDescription)
@@ -609,7 +625,7 @@ public final class StrictValidator {
         }
 
         // In warn mode, report all collected errors
-        if config.strict == .warn && !frameErrors.isEmpty {
+        if strict == .warn && !frameErrors.isEmpty {
             vrmLog("⚠️ [StrictMode] Frame completed with \(frameErrors.count) errors")
         }
     }

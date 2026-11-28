@@ -12,7 +12,7 @@ import simd
 /// or growing oscillation in the absence of input motion is the flutter
 /// signature.
 ///
-/// The test uses `VRMRenderer.drawOffscreenHeadless(...)` against a tiny
+/// The test uses `VRMRenderer.drawOffscreen(...)` against a tiny
 /// throwaway color/depth texture — that gets the production model-init
 /// path (`populateSpringBoneData`, `warmupPhysics`, the per-frame
 /// `update` → `writeBonesToNodes` → `updateNodeTransforms` chain) for
@@ -265,7 +265,7 @@ final class HairFlutterTrajectoryTests: XCTestCase {
             rpd.depthAttachment.clearDepth = 1.0
             rpd.depthAttachment.storeAction = .dontCare
 
-            renderer.drawOffscreenHeadless(
+            renderer.drawOffscreen(
                 to: colorTex, depth: depthTex,
                 commandBuffer: cb, renderPassDescriptor: rpd
             )

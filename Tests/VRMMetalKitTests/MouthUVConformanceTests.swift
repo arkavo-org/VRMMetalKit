@@ -76,7 +76,6 @@ final class MouthUVConformanceTests: XCTestCase {
         let renderer = VRMRenderer(device: device, config: config)
         XCTAssertFalse(renderer.config.legacyMaterialHeuristics, "Must pass under default spec-driven rendering")
         renderer.loadModel(model)
-        renderer.disableLegacyAnimation = true
         renderer.setLight(0, direction: SIMD3<Float>(0, 0, -1), color: SIMD3<Float>(1, 1, 1), intensity: 1.0)
         renderer.disableLight(1)
         renderer.disableLight(2)
@@ -126,7 +125,6 @@ final class MouthUVConformanceTests: XCTestCase {
         config.sampleCount = 1
         let renderer = VRMRenderer(device: device, config: config)
         renderer.loadModel(model)
-        renderer.disableLegacyAnimation = true
         renderer.setLight(0, direction: SIMD3<Float>(0, 0, -1), color: SIMD3<Float>(1, 1, 1), intensity: 1.0)
         renderer.disableLight(1)
         renderer.disableLight(2)

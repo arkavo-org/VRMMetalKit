@@ -793,11 +793,9 @@ public final class VRMModel: VRMSceneContent, @unchecked Sendable {
     public static func load(
         from url: URL,
         device: MTLDevice? = nil,
-        options: VRMLoadingOptions = .default,
-        limits: VRMLoaderLimits? = nil
+        options: VRMLoadingOptions = .default
     ) async throws -> VRMModel {
         let context = await VRMLoadingContext(options: options)
-        let effectiveLimits = limits ?? options.limits
 
         await context.updatePhase(.parsingGLTF, progress: 0.0)
 
@@ -812,7 +810,7 @@ public final class VRMModel: VRMSceneContent, @unchecked Sendable {
             baseURL: url.deletingLastPathComponent(),
             device: device,
             context: context,
-            limits: effectiveLimits
+            limits: options.limits
         )
     }
 
@@ -826,8 +824,7 @@ public final class VRMModel: VRMSceneContent, @unchecked Sendable {
     ///   - data: Raw VRM/GLB file data.
     ///   - filePath: Optional path for error messages.
     ///   - device: Optional Metal device for GPU resources.
-    ///   - options: Optional loading options (progress, cancellation, optimizations, and limits).
-    ///   - limits: Optional override for ``VRMLoaderLimits``. Defaults to `options?.limits ?? .default`.
+    ///   - options: Loading options (progress, cancellation, optimizations, and limits).
     ///
     /// - Returns: A fully loaded `VRMModel` ready for rendering.
     ///
@@ -837,23 +834,16 @@ public final class VRMModel: VRMSceneContent, @unchecked Sendable {
         from data: Data,
         filePath: String? = nil,
         device: MTLDevice? = nil,
-        options: VRMLoadingOptions? = nil,
-        limits: VRMLoaderLimits? = nil
+        options: VRMLoadingOptions = .default
     ) async throws -> VRMModel {
-        let context: VRMLoadingContext?
-        if let options {
-            context = await VRMLoadingContext(options: options)
-        } else {
-            context = nil
-        }
-        let effectiveLimits = limits ?? options?.limits ?? .default
+        let context = await VRMLoadingContext(options: options)
         return try await load(
             from: data,
             filePath: filePath,
             baseURL: nil,
             device: device,
             context: context,
-            limits: effectiveLimits
+            limits: options.limits
         )
     }
 
@@ -871,8 +861,7 @@ public final class VRMModel: VRMSceneContent, @unchecked Sendable {
     ///   - filePath: Optional identifier for error messages.
     ///   - baseURL: Optional base directory for resolving external URIs.
     ///   - device: Optional Metal device for GPU resources.
-    ///   - options: Optional loading options (including ``VRMLoadingOptions/preloadedTextures``).
-    ///   - limits: Optional override for ``VRMLoaderLimits``. Defaults to `options?.limits ?? .default`.
+    ///   - options: Loading options (including ``VRMLoadingOptions/preloadedTextures`` and ``VRMLoadingOptions/limits``).
     ///
     /// - Returns: A fully loaded `VRMModel` ready for rendering.
     ///
@@ -884,16 +873,9 @@ public final class VRMModel: VRMSceneContent, @unchecked Sendable {
         filePath: String? = nil,
         baseURL: URL? = nil,
         device: MTLDevice? = nil,
-        options: VRMLoadingOptions? = nil,
-        limits: VRMLoaderLimits? = nil
+        options: VRMLoadingOptions = .default
     ) async throws -> VRMModel {
-        let context: VRMLoadingContext?
-        if let options {
-            context = await VRMLoadingContext(options: options)
-        } else {
-            context = nil
-        }
-        let effectiveLimits = limits ?? options?.limits ?? .default
+        let context = await VRMLoadingContext(options: options)
         return try await loadParsed(
             document: document,
             binaryData: binaryData,
@@ -901,7 +883,7 @@ public final class VRMModel: VRMSceneContent, @unchecked Sendable {
             baseURL: baseURL,
             device: device,
             context: context,
-            limits: effectiveLimits
+            limits: options.limits
         )
     }
 
@@ -1564,7 +1546,7 @@ public final class VRMHumanoid {
     public var humanBones: [VRMHumanoidBone: VRMHumanBone] = [:]
 
     /// A reference to a humanoid bone's node.
-    public struct VRMHumanBone {
+    public struct VRMHumanBone: Sendable {
         /// The index into `VRMModel.nodes` for this bone.
         public let node: Int
 
@@ -1613,7 +1595,7 @@ public final class VRMFirstPerson {
     public var meshAnnotations: [VRMMeshAnnotation] = []
 
     /// Annotation specifying how a mesh should be rendered in first-person view.
-    public struct VRMMeshAnnotation {
+    public struct VRMMeshAnnotation: Sendable {
         /// The node index of the annotated mesh.
         public let node: Int
         /// The visibility flag for this mesh.

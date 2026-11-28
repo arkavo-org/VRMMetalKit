@@ -84,12 +84,10 @@ import QuartzCore  // For CACurrentMediaTime
 ///
 /// ## Thread Safety
 /// Marked `@unchecked Sendable` so the renderer can be stored in `Sendable`
-/// contexts (e.g., captured by `Task`), but the encode-side methods are
-/// pinned to the main actor — ``draw(in:commandBuffer:renderPassDescriptor:)``
-/// and ``drawOffscreenHeadless(to:depth:commandBuffer:renderPassDescriptor:)``
-/// are both `@MainActor`. ``drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)``
+/// contexts (e.g., captured by `Task`), while ``draw(in:commandBuffer:renderPassDescriptor:)``
+/// is pinned to `@MainActor`. ``drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)``
 /// and ``encodeCompositorViews(commandBuffer:views:)`` are the off-thread
-/// compositor entry points.
+/// headless and compositor entry points.
 ///
 /// Whichever entry point a host picks, exactly one of them drives a given
 /// renderer instance, from one thread. They all funnel into the same
@@ -153,15 +151,70 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// Depth bias resolves true Z-fighting between coplanar surfaces
     /// by pushing fragments toward the camera in depth buffer space.
     public lazy var depthBiasCalculator: DepthBiasCalculator = {
-        DepthBiasCalculator(scale: config.depthBiasScale)
+        DepthBiasCalculator(scale: depthBiasScale)
     }()
 
     // MARK: - Configuration
 
-    /// Renderer configuration including strict mode validation level.
-    ///
+    /// Immutable init-time renderer configuration (pixel format, MSAA, pipeline feature flags).
+    public let config: RendererConfig
+
+    /// Runtime strict-mode validation level (seeded from ``RendererConfig/strict``).
     /// Use `.warn` during development to catch issues, `.off` in production for performance.
-    public var config = RendererConfig(strict: .off)
+    public var strict: StrictLevel {
+        didSet {
+            strictValidator?.strict = strict
+        }
+    }
+
+    /// Runtime debug filter restricting rendering to a single mesh, material, or primitive
+    /// (seeded from ``RendererConfig/renderFilter``).
+    public var renderFilter: RenderFilter?
+
+    /// Debug: render only draw calls `0...N` from the sorted draw list (seeded from ``RendererConfig/drawUntil``).
+    public var drawUntil: Int?
+
+    /// Debug: render only draw call `K` from the sorted draw list (seeded from ``RendererConfig/drawOnlyIndex``).
+    public var drawOnlyIndex: Int?
+
+    /// Debug: replace the palette of skin index `i` with identity matrices (seeded from ``RendererConfig/testIdentityPalette``).
+    public var testIdentityPalette: Int? {
+        didSet {
+            skinningSystem?.testIdentityPalette = testIdentityPalette
+        }
+    }
+
+    /// Global multiplier for per-material depth bias (seeded from ``RendererConfig/depthBiasScale``).
+    public var depthBiasScale: Float {
+        didSet {
+            if depthBiasScale != oldValue {
+                depthBiasCalculator = DepthBiasCalculator(scale: depthBiasScale)
+            }
+        }
+    }
+
+    /// Runtime anisotropic hair highlight parameters (seeded from ``RendererConfig/hairHighlight``).
+    ///
+    /// - Note: Enabling hair highlights requires ``RendererConfig/hairHighlight`` (or another
+    ///   surface extension) to be enabled at init time so the surface-extension shader code is
+    ///   compiled into this renderer's MToon pipelines; otherwise runtime edits have no visual effect.
+    public var hairHighlight: HairHighlightConfig
+
+    /// Runtime opacity of the ground contact shadow, clamped to `0...1` when drawn
+    /// (seeded from ``RendererConfig/contactShadowOpacity``). Takes effect when
+    /// ``RendererConfig/enableContactShadows`` is `true`.
+    public var contactShadowOpacity: Float
+
+    /// Runtime radius multiplier applied to the contact shadow footprint, clamped to at least `0.1`
+    /// (seeded from ``RendererConfig/contactShadowScale``). Takes effect when
+    /// ``RendererConfig/enableContactShadows`` is `true`.
+    public var contactShadowScale: Float
+
+    /// Runtime screen-space crease AO strength, clamped to `0...2` when drawn
+    /// (seeded from ``RendererConfig/ssaoStrength``). Takes effect when
+    /// ``RendererConfig/enableSSAO`` is `true`.
+    public var ssaoStrength: Float
+
     var strictValidator: StrictValidator?
 
     /// The VRM model to render. Set via `loadModel(_:)`.
@@ -246,33 +299,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Legacy global outline width multiplier.
-    ///
-    /// The renderer normalizes this value against `0.02`, so leaving it at the
-    /// default multiplies every material's authored ``VRMMToonMaterial/outlineWidthFactor``
-    /// by exactly `1.0`. The value is unitless; the material's
-    /// ``VRMOutlineWidthMode`` decides how the authored width is interpreted
-    /// (distance-scaled world units or screen pixels). Set to `0` to disable
-    /// all outlines.
-    ///
-    /// New code should prefer ``outlineScale``, which states the multiplier
-    /// directly. Both multiply: `effective = (outlineWidth / 0.02) * outlineScale`.
-    public var outlineWidth: Float = 0.02 {
-        didSet {
-            if outlineWidth < 0 {
-                vrmLog("[VRMRenderer] Warning: outlineWidth cannot be negative, clamping \(outlineWidth) to 0")
-                outlineWidth = max(0, outlineWidth)
-            }
-        }
-    }
-
     /// Explicit multiplier on the authored outline width, where `1.0` means
-    /// "use the material exactly as authored".
-    ///
-    /// Unlike ``outlineWidth`` (which is normalized against its historical
-    /// `0.02` default), this value needs no magic baseline. It composes with
-    /// ``outlineWidth``; the default of `1.0` leaves legacy output unchanged.
-    /// `0` is equivalent to disabling outlines.
+    /// "use the material exactly as authored" and `0` disables outlines.
     public var outlineScale: Float = 1.0 {
         didSet {
             if outlineScale < 0 {
@@ -303,10 +331,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Combined authored-width multiplier applied to every MToon outline.
-    /// `1.0` at the default `outlineWidth` (0.02) and `outlineScale` (1.0).
+    /// Authored-width multiplier applied to every MToon outline (`1.0` by default).
     var effectiveOutlineWidthScale: Float {
-        (outlineWidth / 0.02) * outlineScale
+        outlineScale
     }
 
     /// Global outline color override (RGB). When non-zero, overrides per-material outline colors.
@@ -591,9 +618,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
     // Skinning
     private var skinningSystem: VRMSkinningSystem?
-    /// Legacy per-frame animation state. Newer code should use ``AnimationPlayer``;
-    /// when ``disableLegacyAnimation`` is `true` (the default), the renderer ignores this property.
-    public var animationState: VRMAnimationState?
 
     /// Morph-target compute system used to evaluate blend shapes on the GPU. Auto-created in ``init(device:config:)``.
     public var morphTargetSystem: VRMMorphTargetSystem?
@@ -905,10 +929,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
         return false
     }
-
-    /// When `true` (the default), the renderer ignores ``animationState`` and clears it on the first frame.
-    /// Prefer ``AnimationPlayer`` for new code; set this to `false` only when restoring the legacy path.
-    public var disableLegacyAnimation: Bool = true
 
     /// When `true` (the default), the renderer rebuilds a skin palette only if
     /// one of that skin's joints published a new world matrix this frame.
@@ -1307,6 +1327,16 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         self.device = device
         self.commandQueue = MetalQueueFactory.makeCommandQueue(device: device)!
         self.config = config
+        self.strict = config.strict
+        self.renderFilter = config.renderFilter
+        self.drawUntil = config.drawUntil
+        self.drawOnlyIndex = config.drawOnlyIndex
+        self.testIdentityPalette = config.testIdentityPalette
+        self.depthBiasScale = config.depthBiasScale
+        self.hairHighlight = config.hairHighlight
+        self.contactShadowOpacity = config.contactShadowOpacity
+        self.contactShadowScale = config.contactShadowScale
+        self.ssaoStrength = config.ssaoStrength
         self.strictValidator = StrictValidator(config: config)
         self.skinningSystem = VRMSkinningSystem(device: device)
         self.skinningSystem?.testIdentityPalette = config.testIdentityPalette
@@ -1835,40 +1865,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         return morphedBuffers
     }
 
-    /// Renders the model to an offscreen texture (headless rendering).
-    ///
-    /// Use this for thumbnail generation, sprite caching, or server-side rendering
-    /// without an `MTKView`.
-    ///
-    /// - Parameters:
-    ///   - colorTexture: Target color texture to render into.
-    ///   - depth: Depth texture for z-buffering.
-    ///   - commandBuffer: Command buffer for encoding render commands.
-    ///   - renderPassDescriptor: Render pass configuration with attachments.
-    @MainActor
-    public func drawOffscreenHeadless(to colorTexture: MTLTexture, depth: MTLTexture, commandBuffer: MTLCommandBuffer, renderPassDescriptor: MTLRenderPassDescriptor) {
-        // MTKView.init() runs __initCommon which builds a CVDisplayLink; that's
-        // multiple milliseconds of work per call. drawCore() only needs the
-        // view for its drawableSize, so reuse a single DummyView keyed by
-        // size rather than allocating one per frame.
-        let w = colorTexture.width, h = colorTexture.height
-        let view: DummyView
-        if let cached = cachedDummyView,
-           let cachedSize = cachedDummyViewSize,
-           cachedSize == (w, h) {
-            view = cached
-        } else {
-            view = DummyView(size: CGSize(width: w, height: h))
-            cachedDummyView = view
-            cachedDummyViewSize = (w, h)
-        }
-        vrmLog("[VRMRenderer] drawOffscreenHeadless called - size: \(w)x\(h)")
-        drawCore(viewport: .view(view), commandBuffer: commandBuffer, renderPassDescriptor: renderPassDescriptor)
-    }
-
-    private var cachedDummyView: DummyView?
-    private var cachedDummyViewSize: (Int, Int)?
-
     /// Where ``drawCore(viewport:commandBuffer:renderPassDescriptor:)`` sources
     /// the frame's viewport size.
     ///
@@ -1893,15 +1889,15 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         encoderStateCache.setDepthBias(encoder, bias * sign, slopeScale: slopeScale * sign, clamp: clamp * sign)
     }
 
-    /// Thread-safe offscreen draw for render loops that don't run on the main
-    /// actor (e.g. a CompositorServices frame loop on visionOS). Identical to
-    /// ``drawOffscreenHeadless(to:depth:commandBuffer:renderPassDescriptor:)``
-    /// but passes the viewport size explicitly instead of routing it through
-    /// an `MTKView`, so it is callable from any thread.
+    /// Thread-safe offscreen draw for headless rendering and render loops that
+    /// don't run on the main actor (e.g. a CompositorServices frame loop on
+    /// visionOS). Passes the viewport size explicitly from `colorTexture`
+    /// instead of routing it through an `MTKView`, so it is callable from any
+    /// thread.
     ///
     /// The colour and depth attachments come from `renderPassDescriptor`;
-    /// `colorTexture` supplies the viewport dimensions and `depth` is accepted
-    /// for symmetry with ``drawOffscreenHeadless(to:depth:commandBuffer:renderPassDescriptor:)``.
+    /// `colorTexture` supplies the viewport dimensions and `depth` identifies
+    /// the companion depth target.
     ///
     /// - Important: Not reentrant. The renderer expects a single frame
     ///   producer — the in-flight ring (uniform buffers + `inflightSemaphore`)
@@ -2006,12 +2002,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
 
         if simulate {
-            // Optionally disable legacy animation state to prevent conflicts with AnimationPlayer
-            if disableLegacyAnimation && animationState != nil {
-                if frameCounter == 0 { vrmLog("[VRMRenderer] Disabling legacy animationState (prefer AnimationPlayer)") }
-                animationState = nil
-            }
-
             // Start performance tracking
             performanceTracker?.beginFrame()
 
@@ -2139,7 +2129,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
 
         // Validate pipeline states in strict mode
-        if config.strict != .off {
+        if strict != .off {
             do {
                 try strictValidator?.validatePipelineState(opaquePipelineState, name: "opaque_pipeline")
                 try strictValidator?.validateUniformBuffer(uniformsBuffer, requiredSize: uniformOffset + MemoryLayout<Uniforms>.size)
@@ -2147,7 +2137,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     throw StrictModeError.missingComputeFunction(name: "morph_accumulate")
                 }
             } catch {
-                if config.strict == .fail {
+                if strict == .fail {
                     if simulate {
                         inflightSemaphore.signal()
                         compositorHeldSlot = false
@@ -2312,7 +2302,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         let hasSkinning = !allSkins.isEmpty
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
-            if config.strict != .off {
+            if strict != .off {
                 do {
                     try strictValidator?.handle(.encoderCreationFailed(type: "render"))
                 } catch {
@@ -2344,25 +2334,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
             lookAtController.cameraPosition = cameraPos
             lookAtController.update(deltaTime: frameDeltaTime)
-
-            // Apply LookAt to animation state if in bone mode
-            if let animationState = animationState,
-               lookAtController.mode == .bone {
-                lookAtController.applyToAnimationState(animationState)
-            }
-        }
-
-        // PHASE 3 FIX: Disable legacy animationState to allow AnimationPlayer to work
-        // AnimationPlayer is the correct, modern animation system
-        // animationState was causing T-pose bug by overriding AnimationPlayer transforms
-        if let _ = animationState {
-            if frameCounter == 1 {
-                vrmLog("[VRMRenderer] ⚠️  Legacy animationState present but SKIPPED - AnimationPlayer takes priority")
-            }
-        } else {
-            if frameCounter == 1 {
-                vrmLog("[VRMRenderer] ✅ No animationState - AnimationPlayer transforms preserved")
-            }
         }
 
         // SpringBone GPU physics now runs BEFORE the render encoder is created
@@ -2390,15 +2361,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // Reset skinning cache at frame boundary
             skinningSystem?.beginFrame(bufferIndex: currentUniformBufferIndex)
 
-            // Rebuild only skins whose joints actually moved. The legacy
-            // `animationState` path still dirties every skin because it can
-            // write joints without going through `updateWorldTransform`.
+            // Rebuild only skins whose joints actually moved.
             performanceTracker?.beginPhase(.skinPalette)
             if isAnimationActive {
                 skinningSystem?.markSkinsDirtyIfJointsMoved(allSkins)
-            }
-            if animationState != nil {
-                skinningSystem?.markAllSkinsDirty()
             }
 
             // Update joint matrices for ALL skins (host + attached skinned garments)
@@ -2410,7 +2376,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 #if DEBUG
                 if frameCounter % 60 == 0 && skinIndex == 0 {
                     vrmLog("\n═══ PHASE 1: GPU VALIDATION ═══")
-                    skinningSystem?.validateJointMatricesGPU(for: skin, expectNonIdentity: animationState != nil)
+                    skinningSystem?.validateJointMatricesGPU(for: skin, expectNonIdentity: false)
                 }
                 #endif
             }
@@ -2496,15 +2462,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // here touches the main actor.
             viewportSize = size
         case .view(let view):
-            if let dummyView = view as? DummyView {
-                // DummyView's drawableSize is nonisolated, safe to access directly
-                viewportSize = dummyView.drawableSize
-            } else {
-                // Real MTKView requires main actor isolation. Only reachable
-                // from the @MainActor entry points, which is why the explicit
-                // case above must not route through here.
-                viewportSize = MainActor.assumeIsolated { view.drawableSize }
-            }
+            // Real MTKView requires main actor isolation. Only reachable
+            // from the @MainActor entry points, which is why the explicit
+            // case above must not route through here.
+            viewportSize = MainActor.assumeIsolated { view.drawableSize }
         }
         uniforms.viewportSize = SIMD2<Float>(Float(viewportSize.width), Float(viewportSize.height))
         // Set debug mode (0=off, 1=UV, 2=hasBaseColorTexture, 3=baseColorFactor)
@@ -3011,7 +2972,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             let materialName = item.materialName
 
             // RENDER FILTER: Skip items that don't match the filter
-            if let filter = config.renderFilter {
+            if let filter = renderFilter {
                 let shouldRender: Bool
                 switch filter {
                 case .mesh(let name):
@@ -3107,13 +3068,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             }
 
             // DRAW LIST BISECT: Check if this draw should be rendered
-            if let drawUntil = config.drawUntil {
+            if let drawUntil = drawUntil {
                 if drawIndex > drawUntil {
                     continue
                 }
             }
 
-            if let drawOnlyIndex = config.drawOnlyIndex {
+            if let drawOnlyIndex = drawOnlyIndex {
                 if drawIndex != drawOnlyIndex {
                     drawIndex += 1
                     continue
@@ -4075,7 +4036,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // Draw with validation
             if let indexBuffer = primitive.indexBuffer {
                 // Validate draw call in strict mode
-                if config.strict != .off {
+                if strict != .off {
                     do {
                         try strictValidator?.recordDrawCall(
                             vertexCount: primitive.vertexCount,
@@ -4083,7 +4044,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                             primitiveIndex: item.meshIndex
                         )
                     } catch {
-                        if config.strict == .fail {
+                        if strict == .fail {
                             encoder.endEncoding()
                             vrmLog("❌ [VRMRenderer] Draw validation failed: \(error)")
                         } else {
@@ -4182,7 +4143,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         vrmLog("[SHADER PATH DEBUG]   - debugUVs uniform = \(uniforms.debugUVs)")
                     }
                     // Texture binding verification in strict mode
-                    if config.strict != .off {
+                    if strict != .off {
                         // Verify texture binding consistency for the current material
                         if let material = drawMaterial {
 
@@ -4442,7 +4403,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 }
             } else {
                 // Validate draw call in strict mode
-                if config.strict != .off {
+                if strict != .off {
                     do {
                         try strictValidator?.recordDrawCall(
                             vertexCount: primitive.vertexCount,
@@ -4450,7 +4411,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                             primitiveIndex: item.meshIndex
                         )
                     } catch {
-                        if config.strict == .fail {
+                        if strict == .fail {
                             encoder.endEncoding()
                             vrmLog("❌ [VRMRenderer] Draw validation failed: \(error)")
                         } else {
@@ -4559,11 +4520,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         performanceTracker?.endFrame()
 
         // End frame validation
-        if config.strict != .off {
+        if strict != .off {
             do {
                 try strictValidator?.endFrame()
             } catch {
-                if config.strict == .fail {
+                if strict == .fail {
                     vrmLog("❌ [VRMRenderer] Frame validation failed: \(error)")
                 } else {
                     vrmLog("⚠️ [VRMRenderer] Frame validation warning: \(error)")
@@ -4594,9 +4555,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             if self?.config.checkCommandBufferErrors == true {
                 if buffer.status == .error {
                     let error = buffer.error
-                    if self?.config.strict == .fail {
+                    if self?.strict == .fail {
                         vrmLog("❌ [VRMRenderer] Command buffer failed: \(error?.localizedDescription ?? "unknown error")")
-                    } else if self?.config.strict == .warn {
+                    } else if self?.strict == .warn {
                         vrmLog("⚠️ [StrictMode] Command buffer error: \(error?.localizedDescription ?? "unknown")")
                     }
                 }
@@ -4619,7 +4580,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         projectionMatrix: matrix_float4x4,
         viewportSize: SIMD2<Float>
     ) {
-        let opacity = config.contactShadowOpacity.isFinite ? max(0, min(config.contactShadowOpacity, 1)) : 0
+        let opacity = contactShadowOpacity.isFinite ? max(0, min(contactShadowOpacity, 1)) : 0
         guard opacity > 0,
               let pipeline = spritePipelineState,
               let vertexBuffer = spriteVertexBuffer,
@@ -4631,7 +4592,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
         contactShadowTexture = shadowTexture
 
-        let scale = config.contactShadowScale.isFinite ? max(0.1, config.contactShadowScale) : 1.15
+        let scale = contactShadowScale.isFinite ? max(0.1, contactShadowScale) : 1.15
         let radius = max(footprint.radius * scale, 0.01)
         // A small lift keeps the quad in front of an authored ground plane at
         // the model's base without visibly floating.
@@ -5023,21 +4984,21 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         } else {
             uniforms.metallicFactor = 0
         }
-        let hair = config.hairHighlight
+        let hair = hairHighlight
         let hairOn = hairHighlightMaterials.contains(ObjectIdentifier(material))
         uniforms.hairHighlightStrength = hairOn ? hair.resolvedStrength : 0
         uniforms.hairHighlightSharpness = hair.resolvedSharpness
-        let crease = config.ssaoStrength.isFinite ? max(0, min(config.ssaoStrength, 2)) : 0
+        let crease = ssaoStrength.isFinite ? max(0, min(ssaoStrength, 2)) : 0
         uniforms.ssaoStrength = config.enableSSAO ? crease : 0
     }
 
     /// Recomputes which materials receive the hair band when the model or
-    /// ``RendererConfig/hairHighlight`` changed, so the per-draw path does no
+    /// ``VRMRenderer/hairHighlight`` changed, so the per-draw path does no
     /// string matching.
     private func refreshHairHighlightMaterials(model: VRMModel) {
         let key = ObjectIdentifier(model)
         let topoRev = model.topologyRevision
-        let hair = config.hairHighlight
+        let hair = hairHighlight
         if hairHighlightMaterialsKey?.model == key,
            hairHighlightMaterialsKey?.topologyRevision == topoRev,
            hairHighlightMaterialsKey?.config == hair {
@@ -5252,8 +5213,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // by VRM version (0 = VRM 0.x, 1 = VRM 1.0).
             mtoonUniforms.vrmVersion = material.vrmVersion == .v0_0 ? 0 : 1
 
-            // Apply the explicit scale and the legacy outlineWidth baseline as
-            // multipliers on the per-material width.
+            // Apply the global outline scale multiplier on the per-material width.
             mtoonUniforms.outlineWidthFactor *= self.effectiveOutlineWidthScale
             mtoonUniforms.outlineMinPixels = self.outlineMinimumPixels
             mtoonUniforms.time = drawUVAnimationTime

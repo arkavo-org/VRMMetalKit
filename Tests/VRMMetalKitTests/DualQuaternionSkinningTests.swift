@@ -93,7 +93,7 @@ final class DualQuaternionSkinningTests: XCTestCase {
             rpd.colorAttachments[0].storeAction = .store
             rpd.depthAttachment.texture = depth; rpd.depthAttachment.loadAction = .clear
             rpd.depthAttachment.clearDepth = 1.0; rpd.depthAttachment.storeAction = .dontCare
-            renderer.drawOffscreenHeadless(to: color, depth: depth, commandBuffer: cb, renderPassDescriptor: rpd)
+            renderer.drawOffscreen(to: color, depth: depth, commandBuffer: cb, renderPassDescriptor: rpd)
             cb.commit(); while cb.status != .completed && cb.status != .error { await Task.yield() }
         }
         var bytes = [UInt8](repeating: 0, count: n * n * 4)

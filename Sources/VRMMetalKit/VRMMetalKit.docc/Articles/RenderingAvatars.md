@@ -33,7 +33,7 @@ let renderer = VRMRenderer(device: device, config: config)
 
 // Optional: tighten outlines globally. Per-material widths still
 // come from VRMMToonMaterial.outlineWidthFactor.
-renderer.outlineWidth = 0.015
+renderer.outlineScale = 0.75
 ```
 
 ## Metallic and roughness finishes
@@ -78,16 +78,9 @@ MToon outlines are drawn as a second, inverted-hull pass over each MToon mesh
 whose ``VRMMToonMaterial/outlineWidthMode`` is not `.none`. The per-material
 width comes from ``VRMMToonMaterial/outlineWidthFactor``.
 
-Two multipliers compose:
-
-- ``VRMRenderer/outlineWidth`` (default `0.02`) is the legacy global knob. The
-  renderer normalizes it by dividing by `0.02`, so the default is exactly `1x`
-  the authored width. This keeps existing projects unchanged.
-- ``VRMRenderer/outlineScale`` (default `1.0`) is an explicit multiplier where
-  `1.0` means "use the authored width".
-
-The effective multiplier is `(outlineWidth / 0.02) * outlineScale`. Setting
-either multiplier to zero disables the pass.
+``VRMRenderer/outlineScale`` (default `1.0`) scales the authored per-material
+width globally, where `1.0` means "use the authored width". Setting
+`outlineScale` to `0` disables the outline pass.
 
 The hull is drawn after its surface and never writes depth, as in three-vrm and
 UniVRM. On a translucent material that means the surface's depth write decides

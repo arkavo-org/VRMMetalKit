@@ -51,26 +51,6 @@ public func reverseZProjection(_ projection: float4x4) -> float4x4 {
     return flip * projection
 }
 
-// MARK: - Dummy View for Headless Rendering
-
-class DummyView: MTKView {
-    private let _size: CGSize
-
-    init(size: CGSize) {
-        self._size = size
-        super.init(frame: .zero, device: nil)
-    }
-
-    required init(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    nonisolated override var drawableSize: CGSize {
-        get { _size }
-        set { }  // Ignore sets
-    }
-}
-
 // MARK: - Matrix Extensions
 
 extension float4x4 {

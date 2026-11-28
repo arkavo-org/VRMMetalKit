@@ -1147,7 +1147,7 @@ struct VertexData {
 /// GPU storage is split: ``VRMPositionVertex`` in ``VRMPrimitive/vertexBuffer``
 /// and ``VRMAttributeVertex`` in ``VRMPrimitive/attributeBuffer``. Field
 /// values are not quantized.
-public struct VRMVertex {
+public struct VRMVertex: Sendable {
     /// Object-space position.
     public var position: SIMD3<Float> = [0, 0, 0]
     /// Object-space normal; defaults to `(0, 1, 0)` for meshes without supplied normals.
@@ -1970,7 +1970,7 @@ public final class VRMMaterial: @unchecked Sendable {
     }
 
     /// Coarse pipeline bucket used to pick between opaque and blended render-pass pipeline states.
-    public enum PipelineCategory: Equatable {
+    public enum PipelineCategory: Equatable, Sendable {
         /// `OPAQUE` (and `MASK`, which the renderer also treats as opaque): no color blending.
         case opaque
         /// `BLEND` without depth writes: standard alpha-blend.

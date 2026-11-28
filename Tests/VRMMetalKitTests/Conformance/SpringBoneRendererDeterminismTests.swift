@@ -157,7 +157,7 @@ final class SpringBoneRendererDeterminismTests: XCTestCase {
             rpd.depthAttachment.loadAction = .clear
             rpd.depthAttachment.storeAction = .dontCare
             rpd.depthAttachment.clearDepth = 1.0
-            renderer.drawOffscreenHeadless(to: dummyColor, depth: dummyDepth,
+            renderer.drawOffscreen(to: dummyColor, depth: dummyDepth,
                                            commandBuffer: cb, renderPassDescriptor: rpd)
             let sem = DispatchSemaphore(value: 0)
             cb.addCompletedHandler { _ in sem.signal() }

@@ -119,18 +119,6 @@ extension VRMRenderer: MTKViewDelegate {
 // MARK: - SpringBone Debug Controls
 
 extension VRMRenderer {
-    /// Requests a spring-bone simulation reset.
-    ///
-    /// In the current GPU spring-bone pipeline the simulation state is
-    /// (re)initialized automatically when a model is loaded, so this call is a
-    /// no-op other than emitting a diagnostic log line. It exists as a stable
-    /// entry point for callers that previously drove CPU spring-bone resets
-    /// and may be wired back up if an explicit mid-session reset is needed.
-    public func resetSpringBone() {
-        // GPU system resets automatically on model load
-        vrmLog("[VRMRenderer] SpringBone reset (GPU system resets on model load)")
-    }
-
     /// Applies temporary gravity and/or wind overrides to the spring-bone
     /// simulation for a fixed duration.
     ///

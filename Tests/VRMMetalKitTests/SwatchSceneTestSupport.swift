@@ -47,9 +47,7 @@ enum SwatchScene {
         config.sampleCount = 1
         let renderer = VRMRenderer(device: device, config: config)
         renderer.loadModel(model)
-        renderer.disableLegacyAnimation = true
-        renderer.outlineWidth = setup.outlineWidth
-        renderer.outlineScale = setup.outlineScale
+        renderer.outlineScale = (setup.outlineWidth / 0.02) * setup.outlineScale
         renderer.outlineMinimumPixels = setup.outlineMinimumPixels
         renderer.setLightNormalizationMode(setup.normalization)
         renderer.setLight(0, direction: setup.lightDirection, color: SIMD3<Float>(1, 1, 1), intensity: setup.lightIntensity)

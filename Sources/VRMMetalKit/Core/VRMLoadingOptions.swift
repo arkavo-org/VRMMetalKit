@@ -219,19 +219,8 @@ public struct VRMLoadingOptimization: OptionSet, Sendable {
     /// ≤ 3/255 per channel. Devices that cannot sample BC keep RGBA8.
     public static let aggressiveTextureCompression = VRMLoadingOptimization(rawValue: 1 << 1)
 
-    /// Reserved; currently has no effect. Only `TEXCOORD_0` is ever read, so
-    /// secondary UV channels are already skipped on every load.
-    public static let skipSecondaryUVs = VRMLoadingOptimization(rawValue: 1 << 2)
-
-    /// Reserved; currently has no effect. Use ``parallelTextureLoading`` for
-    /// concurrent texture work.
-    public static let parallelTextureDecoding = VRMLoadingOptimization(rawValue: 1 << 3)
-
     /// Loads textures in parallel using a `TaskGroup`; large win for models with many textures.
     public static let parallelTextureLoading = VRMLoadingOptimization(rawValue: 1 << 4)
-
-    /// Reserved; currently has no effect. Textures always load eagerly.
-    public static let lazyTextureLoading = VRMLoadingOptimization(rawValue: 1 << 5)
 
     /// Loads meshes in parallel using a `TaskGroup`.
     public static let parallelMeshLoading = VRMLoadingOptimization(rawValue: 1 << 6)
@@ -247,7 +236,6 @@ public struct VRMLoadingOptimization: OptionSet, Sendable {
     /// while preserving strict error propagation.
     public static let `default`: VRMLoadingOptimization = [
         .skipVerboseLogging,
-        .parallelTextureDecoding,
         .parallelTextureLoading
     ]
 
@@ -255,8 +243,6 @@ public struct VRMLoadingOptimization: OptionSet, Sendable {
     public static let maximumPerformance: VRMLoadingOptimization = [
         .skipVerboseLogging,
         .aggressiveTextureCompression,
-        .skipSecondaryUVs,
-        .parallelTextureDecoding,
         .parallelTextureLoading,
         .parallelMeshLoading,
         .preloadBuffers,

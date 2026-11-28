@@ -253,7 +253,7 @@ final class ContactShadowTests: XCTestCase {
         modelPass.depthAttachment.texture = depth
         modelPass.depthAttachment.loadAction = .load
         modelPass.depthAttachment.storeAction = .dontCare
-        modelRenderer.drawOffscreenHeadless(to: color, depth: depth, commandBuffer: commandBuffer, renderPassDescriptor: modelPass)
+        modelRenderer.drawOffscreen(to: color, depth: depth, commandBuffer: commandBuffer, renderPassDescriptor: modelPass)
 
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()

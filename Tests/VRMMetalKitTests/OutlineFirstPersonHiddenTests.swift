@@ -127,7 +127,7 @@ final class OutlineFirstPersonHiddenTests: XCTestCase {
         rpd.depthAttachment.clearDepth = 1.0
         rpd.depthAttachment.storeAction = .dontCare
 
-        renderer.drawOffscreenHeadless(
+        renderer.drawOffscreen(
             to: colorTex, depth: depthTex, commandBuffer: commandBuffer, renderPassDescriptor: rpd)
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()

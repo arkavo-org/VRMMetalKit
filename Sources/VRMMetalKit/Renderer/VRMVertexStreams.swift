@@ -21,7 +21,7 @@ import simd
 ///
 /// `SIMD3<Float>` is 16 bytes, matching the position field of ``VRMVertex``.
 /// Values are not quantized.
-public struct VRMPositionVertex {
+public struct VRMPositionVertex: Sendable {
     public var position: SIMD3<Float> = [0, 0, 0]
 
     public init(position: SIMD3<Float> = [0, 0, 0]) {
@@ -33,7 +33,7 @@ public struct VRMPositionVertex {
 ///
 /// Field values match the corresponding ``VRMVertex`` members; only the
 /// stream split and padding change.
-public struct VRMAttributeVertex {
+public struct VRMAttributeVertex: Sendable {
     public var normal: SIMD3<Float> = [0, 1, 0]
     public var texCoord: SIMD2<Float> = [0, 0]
     public var color: SIMD4<Float> = [1, 1, 1, 1]

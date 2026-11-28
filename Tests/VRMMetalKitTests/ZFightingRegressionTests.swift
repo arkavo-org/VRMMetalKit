@@ -57,7 +57,7 @@ final class ZFightingRegressionTests: XCTestCase {
         // These tests measure depth fighting between meshes. MToon outlines
         // are lines a pixel or two wide whose edges alias under the sub-pixel
         // camera perturbation, which would count as flicker.
-        helper.renderer.outlineWidth = 0
+        helper.renderer.outlineScale = 0
     }
 
     // MARK: - Path Helpers

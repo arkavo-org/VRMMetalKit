@@ -580,7 +580,7 @@ struct VRMRenderCLI {
             }
             
             // Render
-            renderer.drawOffscreenHeadless(
+            renderer.drawOffscreen(
                 to: colorTexture,
                 depth: depthTexture,
                 commandBuffer: commandBuffer,

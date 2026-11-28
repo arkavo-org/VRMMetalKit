@@ -67,7 +67,7 @@ final class VRMLoaderLimitsTests: XCTestCase {
         var tight = VRMLoaderLimits.default
         tight.maxAccessorElements = 1
         do {
-            _ = try await VRMModel.load(from: glb, limits: tight)
+            _ = try await VRMModel.load(from: glb, options: VRMLoadingOptions(limits: tight))
             XCTFail("Expected VRMError.limitExceeded for maxAccessorElements=1")
         } catch VRMError.limitExceeded(let kind, let limit, let observed) {
             XCTAssertEqual(kind, "accessorElements")
@@ -86,7 +86,7 @@ final class VRMLoaderLimitsTests: XCTestCase {
 
         var unlimited = VRMLoaderLimits.default
         unlimited.maxAccessorElements = Int.max
-        let model = try await VRMModel.load(from: glb, limits: unlimited)
+        let model = try await VRMModel.load(from: glb, options: VRMLoadingOptions(limits: unlimited))
         XCTAssertEqual(model.meshes.count, 1)
     }
 
@@ -98,7 +98,7 @@ final class VRMLoaderLimitsTests: XCTestCase {
         var tight = VRMLoaderLimits.default
         tight.maxTotalBufferBytes = 1
         do {
-            _ = try await VRMModel.load(from: glb, limits: tight)
+            _ = try await VRMModel.load(from: glb, options: VRMLoadingOptions(limits: tight))
             XCTFail("Expected VRMError.limitExceeded for maxTotalBufferBytes=1")
         } catch VRMError.limitExceeded(let kind, let limit, let observed) {
             XCTAssertEqual(kind, "totalBufferBytes")
@@ -108,7 +108,7 @@ final class VRMLoaderLimitsTests: XCTestCase {
 
         var unlimited = VRMLoaderLimits.default
         unlimited.maxTotalBufferBytes = Int.max
-        let model = try await VRMModel.load(from: glb, limits: unlimited)
+        let model = try await VRMModel.load(from: glb, options: VRMLoadingOptions(limits: unlimited))
         XCTAssertEqual(model.meshes.count, 1)
     }
 
@@ -206,7 +206,7 @@ final class VRMLoaderLimitsTests: XCTestCase {
 
         // Headless (device == nil) must still reject.
         do {
-            _ = try await VRMModel.load(from: glb, device: nil, limits: tight)
+            _ = try await VRMModel.load(from: glb, device: nil, options: VRMLoadingOptions(limits: tight))
             XCTFail("Expected VRMError.limitExceeded for maxSpringBones=1")
         } catch VRMError.limitExceeded(let kind, let limit, let observed) {
             XCTAssertEqual(kind, "springBones")
@@ -216,7 +216,7 @@ final class VRMLoaderLimitsTests: XCTestCase {
 
         var unlimited = VRMLoaderLimits.default
         unlimited.maxSpringBones = Int.max
-        let model = try await VRMModel.load(from: glb, device: MTLCreateSystemDefaultDevice(), limits: unlimited)
+        let model = try await VRMModel.load(from: glb, device: MTLCreateSystemDefaultDevice(), options: VRMLoadingOptions(limits: unlimited))
         XCTAssertEqual(model.springBone?.springs.first?.joints.count, 3)
 
         // Direct SpringBoneBuffers limit check if Metal is available.
@@ -240,7 +240,7 @@ final class VRMLoaderLimitsTests: XCTestCase {
 
         var exact = VRMLoaderLimits.default
         exact.maxSpringBones = 3
-        let model = try await VRMModel.load(from: glb, device: MTLCreateSystemDefaultDevice(), limits: exact)
+        let model = try await VRMModel.load(from: glb, device: MTLCreateSystemDefaultDevice(), options: VRMLoadingOptions(limits: exact))
         let totalAfterLoad = model.springBone?.springs.reduce(0) { $0 + $1.joints.count } ?? 0
         XCTAssertEqual(totalAfterLoad, 3)
         XCTAssertEqual(model.springBone?.springs.count, 1)
@@ -258,7 +258,7 @@ final class VRMLoaderLimitsTests: XCTestCase {
         var tooTight = VRMLoaderLimits.default
         tooTight.maxSpringBones = 2
         do {
-            _ = try await VRMModel.load(from: glb, device: MTLCreateSystemDefaultDevice(), limits: tooTight)
+            _ = try await VRMModel.load(from: glb, device: MTLCreateSystemDefaultDevice(), options: VRMLoadingOptions(limits: tooTight))
             XCTFail("Expected VRMError.limitExceeded for expanded VRM 0.x chain (3 > 2)")
         } catch VRMError.limitExceeded(let kind, let limit, let observed) {
             XCTAssertEqual(kind, "springBones")
@@ -275,7 +275,7 @@ final class VRMLoaderLimitsTests: XCTestCase {
         var tight = VRMLoaderLimits.default
         tight.maxCustomExpressions = 1
         do {
-            _ = try await VRMModel.load(from: glb, limits: tight)
+            _ = try await VRMModel.load(from: glb, options: VRMLoadingOptions(limits: tight))
             XCTFail("Expected VRMError.limitExceeded for VRM 1.0 customExpressions=1")
         } catch VRMError.limitExceeded(let kind, let limit, let observed) {
             XCTAssertEqual(kind, "customExpressions")
@@ -285,7 +285,7 @@ final class VRMLoaderLimitsTests: XCTestCase {
 
         var unlimited = VRMLoaderLimits.default
         unlimited.maxCustomExpressions = Int.max
-        let model = try await VRMModel.load(from: glb, limits: unlimited)
+        let model = try await VRMModel.load(from: glb, options: VRMLoadingOptions(limits: unlimited))
         XCTAssertEqual(model.expressions?.custom.count, 3)
     }
 
@@ -295,7 +295,7 @@ final class VRMLoaderLimitsTests: XCTestCase {
         var tight = VRMLoaderLimits.default
         tight.maxCustomExpressions = 1
         do {
-            _ = try await VRMModel.load(from: glb, limits: tight)
+            _ = try await VRMModel.load(from: glb, options: VRMLoadingOptions(limits: tight))
             XCTFail("Expected VRMError.limitExceeded for VRM 0.x customExpressions=1")
         } catch VRMError.limitExceeded(let kind, let limit, let observed) {
             XCTAssertEqual(kind, "customExpressions")
@@ -305,7 +305,7 @@ final class VRMLoaderLimitsTests: XCTestCase {
 
         var unlimited = VRMLoaderLimits.default
         unlimited.maxCustomExpressions = Int.max
-        let model = try await VRMModel.load(from: glb, limits: unlimited)
+        let model = try await VRMModel.load(from: glb, options: VRMLoadingOptions(limits: unlimited))
         XCTAssertEqual(model.expressions?.custom.count, 3)
     }
 

@@ -62,7 +62,7 @@ final class MergedOutlineHullDepthTests: XCTestCase {
         renderer.loadModel(model)
         renderer.viewMatrix = matrix_identity_float4x4
         renderer.projectionMatrix = matrix_identity_float4x4
-        renderer.outlineWidth = 0.02          // neutral global multiplier (÷ 0.02 == 1)
+        renderer.outlineScale = 1.0
         renderer.outlineColor = SIMD3<Float>(1, 0, 0)
         renderer.setLight(0, direction: SIMD3<Float>(0, 0, 1), color: SIMD3<Float>(1, 1, 1), intensity: 1.0)
         renderer.disableLight(1)

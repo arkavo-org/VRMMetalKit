@@ -285,7 +285,7 @@ final class SpringBoneConcurrentLoadReproTests: XCTestCase {
         rpd.depthAttachment.storeAction = .dontCare
         rpd.depthAttachment.clearDepth = 1.0
 
-        renderer.drawOffscreenHeadless(to: msColor, depth: msDepth,
+        renderer.drawOffscreen(to: msColor, depth: msDepth,
                                        commandBuffer: commandBuffer, renderPassDescriptor: rpd)
         let done = DispatchSemaphore(value: 0)
         commandBuffer.addCompletedHandler { _ in done.signal() }

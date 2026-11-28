@@ -183,7 +183,7 @@ final class BlendAlphaPreservationTests: XCTestCase {
             throw NSError(domain: "BlendAlphaPreservationTests", code: 3)
         }
 
-        renderer.drawOffscreenHeadless(
+        renderer.drawOffscreen(
             to: colorTex,
             depth: depthTex,
             commandBuffer: commandBuffer,

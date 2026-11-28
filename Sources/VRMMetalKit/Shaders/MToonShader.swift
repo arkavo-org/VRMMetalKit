@@ -46,7 +46,7 @@ import simd
 /// excluded from SPM build (see `Package.swift` exclusions) and is pre-compiled
 /// into `Resources/VRMMetalKitShaders.metallib` via `make shaders`; the
 /// runtime pipeline is built by ``VRMPipelineCache`` against the metallib.
-public struct MToonMaterialUniforms {
+public struct MToonMaterialUniforms: Sendable {
     // Block 0: 16 bytes - Base material properties
 
     /// Base colour (sRGB) and alpha factor.
